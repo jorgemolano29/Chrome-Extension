@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <title>VisasPro DS-160</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 380px;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #f8f9fa;
+      color: #1a1a2e;
+    }
+    .header {
+      background: linear-gradient(135deg, #1a1a2e, #16213e);
+      padding: 14px 18px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .logo {
+      width: 36px; height: 36px; background: #e63946;
+      border-radius: 8px; display: flex; align-items: center;
+      justify-content: center; font-weight: 800; color: white; font-size: 14px;
+    }
+    .header h1 { color: white; font-size: 14px; font-weight: 700; }
+    .header p  { color: #8892b0; font-size: 11px; }
+    .body { padding: 14px; }
+    .step-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.6px; color: #718096; margin-bottom: 8px;
+    }
+    .upload-wrapper {
+      position: relative;
+      display: flex; align-items: center; gap: 12px;
+      padding: 16px; background: white;
+      border: 2px dashed #cbd5e0; border-radius: 10px;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .upload-wrapper:hover { border-color: #e63946; background: #fff5f5; }
+    .upload-wrapper input[type="file"] {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      opacity: 0; cursor: pointer;
+    }
+    .upload-icon { font-size: 28px; flex-shrink: 0; }
+    .upload-text { font-size: 12px; color: #4a5568; line-height: 1.5; pointer-events: none; }
+    .upload-text strong { color: #e63946; display: block; font-size: 13px; margin-bottom: 2px; }
+    .progress-wrap { margin-top: 10px; display: none; }
+    .progress-text {
+      display: flex; justify-content: space-between;
+      font-size: 11px; color: #4a5568; margin-bottom: 5px;
+    }
+    .progress-bar { height: 5px; background: #e2e8f0; border-radius: 3px; overflow: hidden; }
+    .progress-fill {
+      height: 100%; background: linear-gradient(90deg, #e63946, #ff6b6b);
+      border-radius: 3px; width: 0%; transition: width 0.3s;
+    }
+    .alert {
+      margin-top: 10px; padding: 10px 12px;
+      border-radius: 8px; font-size: 11px; line-height: 1.5; display: none;
+    }
+    .alert.success { background: #e6f7ee; color: #276749; border-left: 3px solid #38a169; }
+    .alert.error   { background: #fde8e8; color: #9b1c1c; border-left: 3px solid #e53e3e; }
+    .client-card {
+      background: white; border-radius: 10px; overflow: hidden;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08); display: none;
+    }
+    .client-card-header {
+      background: #e63946; padding: 10px 14px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .avatar {
+      width: 34px; height: 34px; background: rgba(255,255,255,0.25);
+      border-radius: 50%; display: flex; align-items: center;
+      justify-content: center; color: white; font-weight: 800; font-size: 13px;
+    }
+    .client-name { color: white; font-size: 13px; font-weight: 700; }
+    .client-sub  { color: rgba(255,255,255,0.75); font-size: 10px; }
+    .data-grid {
+      padding: 10px 14px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    }
+    .data-item .lbl {
+      font-size: 9px; text-transform: uppercase;
+      letter-spacing: 0.4px; color: #a0aec0;
+    }
+    .data-item .val {
+      font-size: 11px; font-weight: 600; color: #1a1a2e;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .divider { height: 1px; background: #f0f0f0; margin: 0 14px; }
+    .sections { padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+    .sections-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.6px; color: #718096; margin-bottom: 4px;
+    }
+    .btn-section {
+      width: 100%; padding: 9px 12px; text-align: left;
+      background: #f7f8ff; border: 1px solid #e2e8f0;
+      border-radius: 7px; font-size: 12px; color: #1a1a2e;
+      cursor: pointer; font-weight: 500; transition: all 0.15s;
+    }
+    .btn-section:hover { background: #e63946; color: white; border-color: #e63946; }
+    .btn-clear {
+      width: calc(100% - 28px); margin: 10px 14px 14px;
+      padding: 8px; background: #f7f8ff;
+      border: 1px solid #e2e8f0; border-radius: 7px;
+      font-size: 11px; color: #718096; cursor: pointer;
+    }
+    .btn-clear:hover { background: #edf2f7; }
+    .footer { text-align: center; padding: 8px; font-size: 10px; color: #a0aec0; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo">VP</div>
+    <div>
+      <h1>VisasPro DS-160</h1>
+      <p>Cargador de datos del cliente</p>
+    </div>
+  </div>
+
+  <div class="body">
+
+    <!-- Paso 1: se oculta al cargar cliente -->
+    <div id="step1">
+      <div class="step-label">📄 Paso 1 — Cargar PDF del cliente</div>
+      <div class="upload-wrapper">
+        <input type="file" id="pdf-input" accept=".pdf" />
+        <span class="upload-icon">📂</span>
+        <span class="upload-text">
+          <strong>Seleccionar PDF</strong>
+          Haz clic para elegir el formulario<br>VisasPro del cliente
+        </span>
+      </div>
+      <div class="progress-wrap" id="progress-wrap">
+        <div class="progress-text">
+          <span id="progress-msg">Procesando...</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="alert" id="alert"></div>
+
+    <!-- Tarjeta del cliente -->
+    <div class="client-card" id="client-card">
+      <div class="client-card-header">
+        <div class="avatar" id="avatar">?</div>
+        <div>
+          <div class="client-name" id="client-name">—</div>
+          <div class="client-sub"  id="client-sub">—</div>
+        </div>
+      </div>
+
+      <div class="data-grid" id="data-grid"></div>
+
+      <div class="divider"></div>
+
+      <!-- Botones de sección -->
+      <div class="sections">
+        <div class="sections-label">📋 Secciones DS-160</div>
+        <button class="btn-section" id="btn-pi1">Personal Information 1</button>
+        <button class="btn-section" id="btn-pi2">Personal Information 2</button>
+        <button class="btn-section" id="btn-travel">Travel Information</button>
+        <button class="btn-section" id="btn-passport">Passport</button>
+        <button class="btn-section" id="btn-contact">Contact Information</button>
+        <button class="btn-section" id="btn-family">Family</button>
+        <button class="btn-section" id="btn-work">Work / Education</button>
+      </div>
+
+      <div class="divider"></div>
+      <button class="btn-clear" id="btn-clear">🗑️ Limpiar y cargar otro cliente</button>
+    </div>
+
+  </div>
+
+  <div class="footer">VisasPro © 2025 · POC v1.0</div>
+
+  <script src="mappings.js"></script>
+  <script src="popup.js"></script>
+
+</body>
+</html>
