@@ -289,7 +289,7 @@ function processField(pdfKey, value) {
       .trim()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '');
-    const result = map[normalized] || map[value.trim()];
+    const result = map[value.trim()] || map[normalized];
     if (!result) console.warn(`[VP] Sin equivalencia en "${rule.equiv}" para: "${value}"`);
     return result || value;
   }
