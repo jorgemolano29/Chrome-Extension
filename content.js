@@ -120,6 +120,10 @@ async function fillTravel(data) {
   // Propósito del viaje — siempre B (Tourism/Pleasure)
   if (fillSelect('ctl00_SiteContentPlaceHolder_FormView1_dlPrincipalAppTravel_ctl00_ddlPurposeOfTrip', 'B')) ok++;
 
+  // Sub-propósito — siempre B1-B2
+  try { await waitFor('ctl00_SiteContentPlaceHolder_FormView1_dlPrincipalAppTravel_ctl00_ddlOtherPurpose'); } catch(e) {}
+  if (fillSelect('ctl00_SiteContentPlaceHolder_FormView1_dlPrincipalAppTravel_ctl00_ddlOtherPurpose', 'B1-B2')) ok++;
+
   // ¿Fechas específicas? → Y (dispara campos de fecha)
   fillRadio('ctl00_SiteContentPlaceHolder_FormView1_rblSpecificTravel_0');
 

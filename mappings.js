@@ -102,13 +102,17 @@ const EQUIV = {
 
   // Duración del viaje — unidad
   travelDurationUnit: {
+    'Día(s)':     'D',
     'Dia(s)':     'D',
+    'Días':       'D',
     'Dias':       'D',
     'Semana(s)':  'W',
     'Semanas':    'W',
     'Mes(es)':    'M',
     'Meses':      'M',
+    'Año(s)':     'Y',
     'Ano(s)':     'Y',
+    'Años':       'Y',
     'Anos':       'Y',
   },
 
