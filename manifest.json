@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "VisasPro DS-160 AutoFill",
-  "version": "1.0.0",
-  "description": "Extrae datos del PDF de VisasPro y llena automáticamente el formulario DS-160",
+  "version": "2.0.0",
+  "description": "Extrae datos del PDF de VisasPro y llena automáticamente el formulario DS-160. Usa Claude API para traducción automática ES→EN.",
   "permissions": [
     "activeTab",
     "scripting",
@@ -10,7 +10,7 @@
   ],
   "host_permissions": [
     "https://ceac.state.gov/*",
-    "http://localhost/*"
+    "https://api.anthropic.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -32,7 +32,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["upload.html", "pdf.worker.min.js"],
+      "resources": ["icons/*.png"],
       "matches": ["<all_urls>"]
     }
   ]

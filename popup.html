@@ -93,13 +93,22 @@
       font-size: 10px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.6px; color: #718096; margin-bottom: 4px;
     }
+    /* Grupos de secciones con separador visual */
+    .section-group { display: flex; flex-direction: column; gap: 6px; }
+    .section-group + .section-group { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e2e8f0; }
+    .group-label {
+      font-size: 9px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.5px; color: #b0bec5;
+    }
     .btn-section {
       width: 100%; padding: 9px 12px; text-align: left;
       background: #f7f8ff; border: 1px solid #e2e8f0;
       border-radius: 7px; font-size: 12px; color: #1a1a2e;
       cursor: pointer; font-weight: 500; transition: all 0.15s;
+      display: flex; align-items: center; gap: 8px;
     }
     .btn-section:hover { background: #e63946; color: white; border-color: #e63946; }
+    .btn-section .btn-icon { font-size: 14px; }
     .btn-clear {
       width: calc(100% - 28px); margin: 10px 14px 14px;
       padding: 8px; background: #f7f8ff;
@@ -160,21 +169,68 @@
 
       <div class="divider"></div>
 
-      <!-- Botones de sección -->
+      <!-- Botones de sección agrupados -->
       <div class="sections">
         <div class="sections-label">📋 Secciones DS-160</div>
-        <button class="btn-section" id="btn-pi1">Personal Information 1</button>
-        <button class="btn-section" id="btn-pi2">Personal Information 2</button>
-        <button class="btn-section" id="btn-travel">Travel Information</button>
-        <button class="btn-section" id="btn-passport">Passport</button>
-        <button class="btn-section" id="btn-contact">Contact Information</button>
-        <button class="btn-section" id="btn-family">Family</button>
-        <button class="btn-section" id="btn-work">Work / Education</button>
-      </div>
+
+        <div class="section-group">
+          <div class="group-label">Identidad</div>
+          <button class="btn-section" id="btn-pi1">
+            <span class="btn-icon">👤</span> Personal Information 1
+          </button>
+          <button class="btn-section" id="btn-pi2">
+            <span class="btn-icon">🪪</span> Personal Information 2
+          </button>
+        </div>
+
+        <div class="section-group">
+          <div class="group-label">Viaje</div>
+          <button class="btn-section" id="btn-travel">
+            <span class="btn-icon">✈️</span> Travel Information
+          </button>
+          <button class="btn-section" id="btn-companions">
+            <span class="btn-icon">👨‍👩‍👧</span> Travel Companions
+          </button>
+          <button class="btn-section" id="btn-prevtravel">
+            <span class="btn-icon">🗓️</span> Previous U.S. Travel
+          </button>
+        </div>
+
+        <div class="section-group">
+          <div class="group-label">Contacto y documentos</div>
+          <button class="btn-section" id="btn-address">
+            <span class="btn-icon">🏠</span> Address &amp; Phone
+          </button>
+          <button class="btn-section" id="btn-passport">
+            <span class="btn-icon">📕</span> Passport
+          </button>
+          <button class="btn-section" id="btn-contact">
+            <span class="btn-icon">🇺🇸</span> U.S. Contact
+          </button>
+        </div>
+
+        <div class="section-group">
+          <div class="group-label">Familia y trabajo</div>
+          <button class="btn-section" id="btn-family">
+            <span class="btn-icon">👨‍👩‍👦</span> Family
+          </button>
+          <button class="btn-section" id="btn-work">
+            <span class="btn-icon">💼</span> Work / Education
+          </button>
+        </div>
+
+        <div class="section-group">
+          <div class="group-label">Seguridad</div>
+          <button class="btn-section" id="btn-security">
+            <span class="btn-icon">🔒</span> Security &amp; Background
+          </button>
+        </div>
+
+      </div><!-- /sections -->
 
       <div class="divider"></div>
       <button class="btn-clear" id="btn-clear">🗑️ Limpiar y cargar otro cliente</button>
-    </div>
+    </div><!-- /client-card -->
 
   </div>
 
