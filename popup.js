@@ -1,6 +1,53 @@
+import * as pdfjsLib from './lib/pdf.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.mjs');
+
+// ── Renderizar PDF a imágenes JPEG en escala de grises ────
+async function pdfToImages(buffer, dpi = 150, quality = 0.85) {
+  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
+  const pdf = await loadingTask.promise;
+  const scale = dpi / 72; // PDF nativo es 72 DPI
+
+  const images = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+
+    // Fondo blanco
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    // Convertir a escala de grises
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    for (let j = 0; j < data.length; j += 4) {
+      const gray = data[j] * 0.299 + data[j + 1] * 0.587 + data[j + 2] * 0.114;
+      data[j] = data[j + 1] = data[j + 2] = gray;
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    // Exportar como JPEG
+    const dataUrl = canvas.toDataURL('image/jpeg', quality);
+    const base64 = dataUrl.split(',')[1];
+    images.push(base64);
+    console.log(`[VP] Página ${i}/${pdf.numPages} renderizada (${Math.round(base64.length / 1024)} KB)`);
+  }
+
+  return images;
+}
+
 // ════════════════════════════════════════════════════════
-//  VISASPRO — POPUP.JS
+//  VISASPRO — POPUP.JS  v2.1
 // ════════════════════════════════════════════════════════
+
+// ⚠️  Reemplaza con tu API key de Anthropic
+//     Obtén una en: https://console.anthropic.com
+const ANTHROPIC_API_KEY = 'sk-ant-XXXXXXXXXXXXXXXXXXXXXXXX';
 
 
 // ── Parser PDF ──────────────────────────────────────────
@@ -8,198 +55,286 @@
 function parsePDFFields(buffer) {
   const bytes = new Uint8Array(buffer);
   let pdf = '';
-  for (let i = 0; i < bytes.length; i++) {
-    pdf += String.fromCharCode(bytes[i]);
-  }
+  for (let i = 0; i < bytes.length; i++) pdf += String.fromCharCode(bytes[i]);
 
   const objIndex = {};
   const objRe = /(\d+)\s+0\s+obj\s*([\s\S]*?)\s*endobj/g;
   let m;
-  while ((m = objRe.exec(pdf)) !== null) {
-    objIndex[m[1]] = m[2];
-  }
+  while ((m = objRe.exec(pdf)) !== null) objIndex[m[1]] = m[2];
 
   function decodePDFString(s) {
     return s
       .replace(/\\(\d{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)))
-      .replace(/\\n/g, '\n')
-      .replace(/\\r/g, '')
-      .replace(/\\t/g, '\t')
-      .replace(/\\\\/g, '\\')
-      .replace(/\\\(/g, '(')
-      .replace(/\\\)/g, ')')
-      .replace(/\s+/g, ' ')
-      .trim();
+      .replace(/\\n/g, '\n').replace(/\\r/g, '').replace(/\\t/g, '\t')
+      .replace(/\\\\/g, '\\').replace(/\\\(/g, '(').replace(/\\\)/g, ')')
+      .replace(/\s+/g, ' ').trim();
   }
 
   function parseDict(str) {
     const result = {};
-
     const tMatch = str.match(/\/T\s*\(([^)]*)\)/);
     if (tMatch) result.T = decodePDFString(tMatch[1]);
-
-    // FIX: regex que maneja paréntesis escapados dentro del valor
     const vStrMatch = str.match(/\/V\s*\(((?:[^)(\\]|\\.|\([^)]*\))*)\)/);
     const vNameMatch = str.match(/\/V\s*\/([^\s\/\[<()\]]+)/);
     if (vStrMatch) result.V = decodePDFString(vStrMatch[1]);
     else if (vNameMatch && vNameMatch[1] !== 'Off') result.V = vNameMatch[1];
-
     const parentMatch = str.match(/\/Parent\s+(\d+)\s+0\s+R/);
     if (parentMatch) result.parentId = parentMatch[1];
-
-    const subtypeMatch = str.match(/\/Subtype\s*\/(\w+)/);
-    if (subtypeMatch) result.Subtype = subtypeMatch[1];
-
     return result;
   }
 
   const fields = {};
-
-  for (const [objId, body] of Object.entries(objIndex)) {
+  for (const [, body] of Object.entries(objIndex)) {
     if (!body.includes('/Widget')) continue;
-
     const obj = parseDict(body);
-
-    if (obj.T && obj.V && obj.V !== 'no aplica') {
-      fields[obj.T] = obj.V;
-      continue;
-    }
-
+    if (obj.T && obj.V && obj.V !== 'no aplica') { fields[obj.T] = obj.V; continue; }
     if (!obj.T && obj.parentId && objIndex[obj.parentId]) {
       const parent = parseDict(objIndex[obj.parentId]);
-      if (parent.T && parent.V && parent.V !== 'no aplica') {
-        fields[parent.T] = parent.V;
-      }
+      if (parent.T && parent.V && parent.V !== 'no aplica') fields[parent.T] = parent.V;
     }
   }
-
   console.log('[VisasPro] Campos extraídos del PDF:', fields);
   return fields;
 }
 
 
-// ── Construir objeto cliente aplicando reglas ────────────
-//  Usa processField() de mappings.js para limpiar o traducir
-//  cada campo según su regla definida en FIELD_RULES
+// ── Traducción automática ES→EN via Claude API ───────────
+
+async function translateFields(fieldsToTranslate) {
+  if (!fieldsToTranslate || Object.keys(fieldsToTranslate).length === 0) return {};
+
+  const prompt = [
+    'You are translating fields from a Mexican visa application form from Spanish to English.',
+    'Translate each value accurately and concisely. Keep proper nouns as-is.',
+    'Respond ONLY with a valid JSON object mapping the same keys to their English translations.',
+    'Do not include any explanation, markdown, or extra text.',
+    '',
+    'Fields to translate:',
+    JSON.stringify(fieldsToTranslate, null, 2),
+  ].join('\n');
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(`API error ${response.status}: ${err?.error?.message || 'desconocido'}`);
+    }
+    const data = await response.json();
+    const raw = data.content?.[0]?.text || '{}';
+    const translated = JSON.parse(raw.replace(/```json|```/g, '').trim());
+    console.log('[VisasPro] Traducciones obtenidas:', translated);
+    return translated;
+  } catch (err) {
+    console.error('[VisasPro] Error en traducción:', err);
+    return fieldsToTranslate; // fallback: devolver originales
+  }
+}
+
+
+// ── buildClientData ──────────────────────────────────────
 
 function buildClientData(f) {
-  // Shorthand: obtiene valor crudo y aplica su regla
   const p = k => processField(k, (f[k] || '').trim());
-  // Shorthand: solo valor crudo sin procesar (ej. días, años)
   const r = k => (f[k] || '').trim();
 
   return {
-    // ── Información personal ──
-    firstName:        p('PI1_NOMBRE_SOLICITANTE'),
-    lastName:         p('PI1_APELLIDOS_SOLICITANTE'),
-    gender:           p('PI1_GENERO'),
-    maritalStatus:    p('PI1_ESTADO_CIVIL'),
-    dob_day:          r('PI1_DIA_NACIMIENTO_SOLICITANTE'),
-    dob_month:        p('PI1_MES_NACIMIENTO_SOLICITANTE'),
-    dob_year:         r('PI1_ANO_NACIMIENTO_SOLICITANTE'),
-    birthCity:        p('PI1_CIUDAD_NACIMIENTO_SOLICITANTE'),
-    birthState:       p('PI1_ESTADO_NACIMIENTO_SOLICITANTE'),
-    nationality:      p('PI1_PAIS_REGION_SOLICITANTE'),
-    curp:             p('PI2_CURP'),
+    // ── Información Personal 1 ──
+    firstName:              p('PI1_NOMBRE_SOLICITANTE'),
+    lastName:               p('PI1_APELLIDOS_SOLICITANTE'),
+    gender:                 p('PI1_GENERO'),
+    maritalStatus:          p('PI1_ESTADO_CIVIL'),
+    dob_day:                r('PI1_DIA_NACIMIENTO_SOLICITANTE'),
+    dob_month:              p('PI1_MES_NACIMIENTO_SOLICITANTE'),
+    dob_year:               r('PI1_ANO_NACIMIENTO_SOLICITANTE'),
+    birthCity:              p('PI1_CIUDAD_NACIMIENTO_SOLICITANTE'),
+    birthState:             p('PI1_ESTADO_NACIMIENTO_SOLICITANTE'),
+    nationality:            p('PI1_PAIS_REGION_SOLICITANTE'),
 
-    // ── Viaje ──
-    travelDate_day:   r('TRA_DIA_VIAJE'),
-    travelDate_month: p('TRA_MES_VIAJE'),
-    travelDate_year:  r('TRA_ANO_VIAJE'),
-    travelDurationNum:  r('TRA_DURACION_NUMERO'),
-    travelDurationUnit: p('TRA_DURACION_UNIDAD'),
-    travelStreet:       p('TRA_HOSPEDAJE_CALLE'),
-    travelCity:         p('TRA_HOSPEDAJE_CIUDAD'),
-    travelState:        p('TRA_HOSPEDAJE_ESTADO'),
-    travelZip:          r('TRA_HOSPEDAJE_ZIP'),
-    travelPayer:        p('TRA_QUIEN_PAGA_VIAJE'),
-    payerFirstName:     p('TRA_PAGA_VIAJE_NOMBRE'),
-    payerLastName:      p('TRA_PAGA_VIAJE_APELLIDO'),
-    payerPhone:         p('TRA_PAGA_VIAJE_TELEFONO'),
-    payerRelationship:  p('TRA_PAGA_VIAJE_PARENTESCO'),
-    payerStreet:        p('TRA_DIRECCION_PAGA_VIAJE_CALLE'),
-    payerCity:          p('TRA_DIRECCION_PAGA_VIAJE_CIUDAD'),
-    payerState:         p('TRA_DIRECCION_PAGA_VIAJE_ESTADO'),
-    payerZip:           r('TRA_DIRECCION_PAGA_VIAJE_ZIP'),
-    companionFirstName:    p('TRA_COM_NOMBRE'),
-    companionLastName:     p('TRA_COM_APELLIDO'),
-    companionRelationship: r('TRA_COM_PARENTESCO'),
+    // ── Información Personal 2 ──
+    curp:                   p('PI2_CURP'),
 
-    // ── Viajes previos ──
-    prevTravel_day:   r('PUST_DIA'),
-    prevTravel_month: p('PUST_MES'),
-    prevTravel_year:  r('PUST_ANO'),
-    prevTravelDuration:`${r('PUST_DURACION_NUMERO')} ${r('PUST_DURACION_UNIDAD')}`,
-    visaNumber:       r('PUST_VISA_PREVIA_NUMERO'),
-    visaIssue_day:    r('PUST_VISA_PREVIA_E_DIA'),
-    visaIssue_month:  p('PUST_VISA_PREVIA_E_MES'),
-    visaIssue_year:   r('PUST_VISA_PREVIA_E_ANO'),
-    visaExpiry_day:   r('PUST_VISA_PREVIA_V_DIA'),
-    visaExpiry_month: p('PUST_VISA_PREVIA_V_MES'),
-    visaExpiry_year:  r('PUST_VISA_PREVIA_V_ANO'),
+    // ── Dirección ──
+    street:                 p('DIR_CALLE'),
+    city:                   p('DIR_CIUDAD'),
+    state:                  p('DIR_ESTADO'),
+    zip:                    p('DIR_ZIP'),
+    phone:                  p('DIR_CELULAR'),
+    email:                  p('DIR_CORREO'),
+    socialNetwork:          p('DIR_RRSS'),
+    socialHandle:           r('DIR_RRSS_USER'),
 
-    // ── Dirección y contacto ──
-    street:           p('DIR_CALLE'),
-    city:             p('DIR_CIUDAD'),
-    state:            p('DIR_ESTADO'),
-    country:          r('DIR_PAIS'),
-    zip:              r('DIR_ZIP'),
-    phone:            p('DIR_CELULAR'),
-    email:            p('DIR_CORREO'),
-    socialNetwork:    r('DIR_RRSS'),
-    socialHandle:     r('DIR_RRSS_USER'),
+    // ── Información de Viaje ──
+    travelDate_day:         r('TRA_DIA_VIAJE'),
+    travelDate_month:       p('TRA_MES_VIAJE'),
+    travelDate_year:        r('TRA_ANO_VIAJE'),
+    travelDurationNum:      r('TRA_DURACION_NUMERO'),
+    travelDurationUnit:     p('TRA_DURACION_UNIDAD'),
+    travelStreet:           p('TRA_HOSPEDAJE_CALLE'),
+    travelCity:             p('TRA_HOSPEDAJE_CIUDAD'),
+    travelState:            p('TRA_HOSPEDAJE_ESTADO'),
+    travelZip:              p('TRA_HOSPEDAJE_ZIP'),
+    travelPayer:            p('TRA_QUIEN_PAGA_VIAJE'),
+    payerFirstName:         p('TRA_PAGA_VIAJE_NOMBRE'),
+    payerLastName:          p('TRA_PAGA_VIAJE_APELLIDO'),
+    payerPhone:             p('TRA_PAGA_VIAJE_TELEFONO'),
+    payerRelationship:      p('TRA_PAGA_VIAJE_PARENTESCO'),
+    payerStreet:            p('TRA_DIRECCION_PAGA_VIAJE_CALLE'),
+    payerCity:              p('TRA_DIRECCION_PAGA_VIAJE_CIUDAD'),
+    payerState:             p('TRA_DIRECCION_PAGA_VIAJE_ESTADO'),
+    payerZip:               p('TRA_DIRECCION_PAGA_VIAJE_ZIP'),
+
+    // ── Acompañantes ──
+    companionFirstName:     p('TRA_COM_NOMBRE'),
+    companionLastName:      p('TRA_COM_APELLIDO'),
+    companionRelationship:  p('TRA_COM_PARENTESCO'),
+
+    // ── Viajes Previos a USA ──
+    prevTravel_day:         r('PUST_DIA'),
+    prevTravel_month:       p('PUST_MES'),
+    prevTravel_year:        r('PUST_ANO'),
+    prevTravelDurationNum:  r('PUST_DURACION_NUMERO'),
+    prevTravelDurationUnit: p('PUST_DURACION_UNIDAD'),
+    visaIssue_day:          r('PUST_VISA_PREVIA_E_DIA'),
+    visaIssue_month:        p('PUST_VISA_PREVIA_E_MES'),
+    visaIssue_year:         r('PUST_VISA_PREVIA_E_ANO'),
+    visaNumber:             p('PUST_VISA_PREVIA_NUMERO'),
+    visaLostYear:           r('PUST_ANO_EXTRAVIO'),
+    visaLostExplanation:    p('PUST_EXP_EXTRAVIO'),    // TRANSLATE
+    visaRefusedExplanation: p('PUST_EXP_RECHAZO'),     // TRANSLATE
 
     // ── Pasaporte ──
-    passportNumber:   p('PAS_NUMBER'),
-    passportCity:     p('PAS_EMISION_CIUDAD'),
-    passportState:    p('PAS_EMISION_ESTADO'),
-    passportCountry:  p('PAS_EMISION_PAIS'),
-    passportIssue_day:  r('PAS_EXP_DIA'),
-    passportIssue_month:p('PAS_EXP_MES'),
-    passportIssue_year: r('PAS_EXP_ANO'),
-    passportExpiry_day:  r('PAS_VEN_DIA'),
-    passportExpiry_month:p('PAS_VEN_MES'),
-    passportExpiry_year: r('PAS_VEN_ANO'),
+    passportNumber:         p('PAS_NUMBER'),
+    passportCity:           p('PAS_EMISION_CIUDAD'),
+    passportState:          p('PAS_EMISION_ESTADO'),
+    passportIssue_day:      r('PAS_EXP_DIA'),
+    passportIssue_month:    p('PAS_EXP_MES'),
+    passportIssue_year:     r('PAS_EXP_ANO'),
+    passportExpiry_day:     r('PAS_VEN_DIA'),
+    passportExpiry_month:   p('PAS_VEN_MES'),
+    passportExpiry_year:    r('PAS_VEN_ANO'),
+    passportLostNumber:     p('PAS_EXTRAVIO_NUM'),
+    passportLostExplanation:p('PAS_EXTRAVIO_EXP'),     // TRANSLATE
 
-    // ── Contacto en EUA ──
-    usContactFirstName:    p('CONTUSA_NOMBRE'),
-    usContactLastName:     p('CONTUSA_APELLIDO'),
-    usContactRelationship: r('CONTAUSA_PARENTESCO'),
-    usContactStreet:       p('CONTAUSA_CALLE'),
-    usContactCity:         p('CONTAUSA_CIUDAD'),
-    usContactState:        p('CONTAUSA_ESTADO'),
-    usContactZip:          r('CONTAUSA_ZIP'),
-    usContactPhone:        p('CONTAUSA_TEL'),
+    // ── Dirección de Contacto en los EUA ──
+    usContactFirstName:     p('CONTUSA_NOMBRE'),
+    usContactLastName:      p('CONTUSA_APELLIDO'),
+    usContactHotel:         p('CONTUSA_HOTEL'),
+    usContactRelationship:  p('CONTAUSA_PARENTESCO'),
+    usContactStreet:        p('CONTAUSA_CALLE'),
+    usContactCity:          p('CONTAUSA_CIUDAD'),
+    usContactState:         p('CONTAUSA_ESTADO'),
+    usContactZip:           p('CONTAUSA_ZIP'),
+    usContactPhone:         p('CONTAUSA_TEL'),
 
     // ── Familia ──
-    fatherFirstName:  p('FAM_NOMBRE_PADRE'),
-    fatherLastName:   p('FAM_APELLIDO_PADRE'),
-    fatherDob_day:    r('FAM_DIA_PADRE'),
-    fatherDob_month:  p('FAM_MES_PADRE'),
-    fatherDob_year:   r('FAM_ANO_PADRE'),
-    motherFirstName:  p('FAM_NOMBRE_MADRE'),
-    motherLastName:   p('FAM_APELLIDO_MADRE'),
-    motherDob_day:    r('FAM_DIA_MADRE'),
-    motherDob_month:  p('FAM_MES_MADRE'),
-    motherDob_year:   r('FAM_ANO_MADRE'),
-    familyInUSA:      r('FAM_OTRO_FAMILIAR'),
+    fatherFirstName:        p('FAM_NOMBRE_PADRE'),
+    fatherLastName:         p('FAM_APELLIDO_PADRE'),
+    fatherDob_day:          r('FAM_DIA_PADRE'),
+    fatherDob_month:        p('FAM_MES_PADRE'),
+    fatherDob_year:         r('FAM_ANO_PADRE'),
+    motherFirstName:        p('FAM_NOMBRE_MADRE'),
+    motherLastName:         p('FAM_APELLIDO_MADRE'),
+    motherDob_day:          r('FAM_DIA_MADRE'),
+    motherDob_month:        p('FAM_MES_MADRE'),
+    motherDob_year:         r('FAM_ANO_MADRE'),
+    usRelativeFirstName:    p('FAM_DIRECTA_NOMBRE'),
+    usRelativeLastName:     p('FAM_DIRECTA_APELLIDO'),
+    usRelativeRelationship: p('FAM_DIRECTA_PARENTESCO'),
+    usRelativeStatus:       p('FAM_DIRECTA_ESTATUS'),
+    hasOtherUSRelative:     r('FAM_OTRO_FAMILIAR'),
 
-    // ── Trabajo / educación ──
-    occupation:       r('WET_PRESENT_OCUPACION'),
-    employer:         p('WET_PRESENT_NOBRE_LUGAR'),
-    workStreet:       p('WET_PRESENT_CALLE'),
-    workCity:         p('WET_PRESENT_CIUDAD'),
-    workState:        p('WET_PRESENT_ESTADO'),
-    workZip:          r('WET_PRESENT_ZIP'),
-    workPhone:        p('WET_PRESENT_TEL'),
-    workStart_day:    r('WET_PRESENT_INGRESO_DIA'),
-    workStart_month:  p('WET_PRESENT_INGRESO_MES'),
-    workStart_year:   r('WET_PRESENT_INGRESO_ANO'),
+    // ── Pareja ──
+    spouseFirstName:        p('PAREJA_NOMBRE'),
+    spouseLastName:         p('PAREJA_APELLIDO'),
+    spouseNationality:      p('PAREJA_NACIONALIDAD'),
+    spouseDob_day:          r('PAREJA_DIA'),
+    spouseDob_month:        p('PAREJA_MES'),
+    spouseDob_year:         r('PAREJA_ANO'),
+    spouseBirthCity:        p('PAREJA_CIUDAD'),
+    spouseBirthCountry:     p('PAREJA_PAIS'),
 
-    // ── Países visitados ──
-    countriesVisited: r('ADD_PAIS_1'),
+    // ── Trabajo actual ──
+    occupation:             p('WET_PRESENT_OCUPACION'),
+    occupationText:         processField('WET_PRESENT_OCUPACION_TEXT', (f['WET_PRESENT_OCUPACION'] || '').trim()),
+    employer:               p('WET_PRESENT_NOBRE_LUGAR'),
+    workStreet:             p('WET_PRESENT_CALLE'),
+    workCity:               p('WET_PRESENT_CIUDAD'),
+    workState:              p('WET_PRESENT_ESTADO'),
+    workZip:                p('WET_PRESENT_ZIP'),
+    workPhone:              p('WET_PRESENT_TEL'),
+    workStart_day:          r('WET_PRESENT_INGRESO_DIA'),
+    workStart_month:        p('WET_PRESENT_INGRESO_MES'),
+    workStart_year:         r('WET_PRESENT_INGRESO_ANO'),
+    workSalary:             r('WET_PRESENT_INGRESO_MXN'),
+    workDuties:             p('WET_PRESENT_ACTIVIDADES'), // TRANSLATE
+
+    // ── Trabajo anterior / Estudios ──
+    prevEmployer:           p('WET_PREV_NOMBRE'),
+    prevWorkStreet:         p('WET_PREV_CALLE'),
+    prevWorkCity:           p('WET_PREV_CIUDAD'),
+    prevWorkState:          p('WET_PREV_ESTADO'),
+    prevWorkZip:            p('WET_PREV_ZIP'),
+    prevWorkCountry:        p('WET_PREV_PAIS'),
+    prevWorkPhone:          p('WET_PREV_TEL'),
+    prevJobTitle:           p('WET_PREV_PUESTO'),         // TRANSLATE
+    prevSupervisorFirst:    p('WET_PREV_JEFE_NOMBRE'),
+    prevSupervisorLast:     p('WET_PREV_JEFE_APELLIDO'),
+    prevWorkStart_day:      r('WET_PREV_ING_DIA'),
+    prevWorkStart_month:    p('WET_PREV_ING_MES'),
+    prevWorkStart_year:     r('WET_PREV_ING_ANO'),
+    prevWorkEnd_day:        r('WET_PREV_SALIDA_DIA'),
+    prevWorkEnd_month:      p('WET_PREV_SALIDA_MES'),
+    prevWorkEnd_year:       r('WET_PREV_SALIDA_ANO'),
+    prevWorkDuties:         p('WET_PREV_ACTIVIDADES'),    // TRANSLATE
+    schoolName:             p('EST_NOMBRE_ESCUELA'),
+    schoolStreet:           p('EST_CALLE'),
+    schoolCity:             p('EST_CIUDAD'),
+    schoolState:            p('EST_ESTADO'),
+    schoolZip:              p('EST_ZIP'),
+    schoolCountry:          p('EST_PAIS'),
+    schoolCourse:           p('EST_CURSO'),               // TRANSLATE
+    schoolStart_day:        r('EST_ING_DIA'),
+    schoolStart_month:      p('EST_ING_MES'),
+    schoolStart_year:       r('EST_ING_ANO'),
+    schoolEnd_day:          r('EST_SALIDA_DIA'),
+    schoolEnd_month:        p('EST_SALIDA_MES'),
+    schoolEnd_year:         r('EST_SALIDA_ANO'),
+
+    // ── Adicional / Seguridad ──
+    language1:              p('ADD_IDIOMA_1'),
+    language2:              p('ADD_IDIOMA_2'),
+    language3:              p('ADD_IDIOMA_3'),
+    country1:               p('ADD_PAIS_1'),
+    country2:               p('ADD_PAIS_2'),
+    country3:               p('ADD_PAIS_3'),
   };
 }
+
+
+// ── Mapeo pdfKey → dataKey para campos TRANSLATE ─────────
+
+const TRANSLATE_KEY_MAP = {
+  'PUST_EXP_EXTRAVIO':       'visaLostExplanation',
+  'PUST_EXP_RECHAZO':        'visaRefusedExplanation',
+  'PAS_EXTRAVIO_EXP':        'passportLostExplanation',
+  'WET_PRESENT_ACTIVIDADES': 'workDuties',
+  'WET_PREV_PUESTO':         'prevJobTitle',
+  'WET_PREV_ACTIVIDADES':    'prevWorkDuties',
+  'EST_CURSO':               'schoolCourse',
+};
 
 
 // ── Flujo principal ──────────────────────────────────────
@@ -207,34 +342,44 @@ function buildClientData(f) {
 document.getElementById('pdf-input').addEventListener('change', function(e) {
   const file = e.target.files[0];
   if (!file) return;
-  if (file.type !== 'application/pdf') {
-    showAlert('Solo se aceptan archivos PDF.', 'error');
-    return;
-  }
+  if (file.type !== 'application/pdf') { showAlert('Solo se aceptan archivos PDF.', 'error'); return; }
   processPDF(file);
 });
 
 document.getElementById('btn-clear').addEventListener('click', clearData);
 
-document.getElementById('btn-pi1').addEventListener('click',      () => fillSection('pi1'));
-document.getElementById('btn-pi2').addEventListener('click',      () => fillSection('pi2'));
-document.getElementById('btn-travel').addEventListener('click',   () => fillSection('travel'));
-document.getElementById('btn-passport').addEventListener('click', () => fillSection('passport'));
-document.getElementById('btn-contact').addEventListener('click',  () => fillSection('contact'));
-document.getElementById('btn-family').addEventListener('click',   () => fillSection('family'));
-document.getElementById('btn-work').addEventListener('click',     () => fillSection('work'));
+const SECTION_BTNS = [
+  ['btn-pi1',       'pi1'],
+  ['btn-pi2',       'pi2'],
+  ['btn-travel',    'travel'],
+  ['btn-companions','companions'],
+  ['btn-prevtravel','prevTravel'],
+  ['btn-address',   'address'],
+  ['btn-passport',  'passport'],
+  ['btn-contact',   'contact'],
+  ['btn-family',    'family'],
+  ['btn-spouse',    'spouse'],
+  ['btn-work',      'work'],
+  ['btn-workprev',  'workPrev'],
+  ['btn-additional','additional'],
+  ['btn-security',  'security'],
+  ['btn-review',    'review'],
+];
+
+for (const [btnId, section] of SECTION_BTNS) {
+  document.getElementById(btnId).addEventListener('click', () => fillSection(section));
+}
 
 async function fillSection(section) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   chrome.tabs.sendMessage(tab.id, { action: 'fill', section }, (response) => {
     if (chrome.runtime.lastError) {
-      showAlert('❌ Recarga la página del DS-160 y vuelve a intentar.', 'error');
-      return;
+      showAlert('Recarga la página del DS-160 y vuelve a intentar.', 'error'); return;
     }
     if (response && response.ok) {
-      showAlert(`✅ ${section.toUpperCase()} — ${response.filled} campos llenados.`, 'success');
+      showAlert(`${section.toUpperCase()} — ${response.filled} campos llenados.`, 'success');
     } else {
-      showAlert(`❌ Error: ${response?.error || 'desconocido'}`, 'error');
+      showAlert(`Error: ${response?.error || 'desconocido'}`, 'error');
     }
   });
 }
@@ -246,32 +391,53 @@ async function processPDF(file) {
 
   try {
     const buffer = await file.arrayBuffer();
-    setProgress(50, 'Extrayendo campos...');
+    setProgress(30, 'Extrayendo campos...');
+    let rawFields = parsePDFFields(buffer);
+    let fieldCount = Object.keys(rawFields).length;
 
-    const rawFields = parsePDFFields(buffer);
-    const fieldCount = Object.keys(rawFields).length;
-
+    // PDF flatten detectado — ofrecer Claude Vision
     if (fieldCount < 5) {
-      throw new Error(`Solo se encontraron ${fieldCount} campos. ¿Es el formulario VisasPro correcto?`);
+      console.log('[VisasPro] PDF flatten detectado...');
+      const useVision = await askClaudeVision();
+      if (!useVision) {
+        throw new Error('Procesamiento cancelado. Pide al cliente que guarde el PDF con Adobe Acrobat Reader → Archivo → Guardar.');
+      }
+      setProgress(55, 'Enviando a Claude Vision...');
+      rawFields = await extractWithClaudeVision(buffer);
+      fieldCount = Object.keys(rawFields).length;
     }
 
-    setProgress(85, 'Aplicando reglas...');
+    if (fieldCount < 5)
+      throw new Error(`No se pudieron extraer datos del PDF (${fieldCount} campos). Verifica que sea el formulario VisasPro correcto.`);
+
+    setProgress(55, 'Aplicando reglas...');
     const data = buildClientData(rawFields);
 
+    const toTranslate = getTranslatableFields(rawFields);
+    if (Object.keys(toTranslate).length > 0) {
+      setProgress(75, 'Traduciendo campos...');
+      const translations = await translateFields(toTranslate);
+      for (const [pdfKey, translated] of Object.entries(translations)) {
+        const dataKey = TRANSLATE_KEY_MAP[pdfKey];
+        if (dataKey && translated) data[dataKey] = translated;
+      }
+    }
+
     setProgress(100, '¡Listo!');
-
-    chrome.storage.local.set({ visasproClientData: data }, () => {
-      console.log('[VisasPro] Datos guardados:', data);
-    });
-
+    chrome.storage.local.set({ visasproClientData: data });
     showProgress(false);
     renderClientCard(data);
-    showAlert(`✅ PDF cargado. ${fieldCount} campos extraídos.`, 'success');
-
+    const tCount = Object.keys(toTranslate).length;
+    showAlert(
+      tCount > 0
+        ? `PDF cargado. ${fieldCount} campos, ${tCount} traducidos.`
+        : `PDF cargado. ${fieldCount} campos extraídos.`,
+      'success'
+    );
   } catch (err) {
     console.error('[VisasPro] Error:', err);
     showProgress(false);
-    showAlert('❌ ' + err.message, 'error');
+    showAlert(err.message, 'error');
   }
 }
 
@@ -281,31 +447,22 @@ async function processPDF(file) {
 function renderClientCard(data) {
   const fullName = `${data.firstName} ${data.lastName}`.trim();
   const initials = ((data.firstName||'')[0]||'') + ((data.lastName||'')[0]||'');
-
   document.getElementById('avatar').textContent      = initials.toUpperCase() || '?';
   document.getElementById('client-name').textContent = fullName || '—';
   document.getElementById('client-sub').textContent  = data.curp || '—';
 
   document.getElementById('data-grid').innerHTML = `
-    <div class="data-item">
-      <div class="lbl">Fecha de Nacimiento</div>
-      <div class="val">${data.dob_day}/${data.dob_month}/${data.dob_year}</div>
-    </div>
-    <div class="data-item">
-      <div class="lbl">Género</div>
-      <div class="val">${data.gender || '—'}</div>
-    </div>
-    <div class="data-item">
-      <div class="lbl">Estado Civil</div>
-      <div class="val">${data.maritalStatus || '—'}</div>
-    </div>
-    <div class="data-item">
-      <div class="lbl">Ciudad de Nacimiento</div>
-      <div class="val">${data.birthCity || '—'}</div>
-    </div>
+    <div class="data-item"><div class="lbl">Nacimiento</div>
+      <div class="val">${data.dob_day}/${data.dob_month}/${data.dob_year}</div></div>
+    <div class="data-item"><div class="lbl">Género</div>
+      <div class="val">${data.gender || '—'}</div></div>
+    <div class="data-item"><div class="lbl">Estado Civil</div>
+      <div class="val">${data.maritalStatus || '—'}</div></div>
+    <div class="data-item"><div class="lbl">Pasaporte</div>
+      <div class="val">${data.passportNumber || '—'}</div></div>
   `;
 
-  document.getElementById('step1').style.display   = 'none';
+  document.getElementById('step1').style.display       = 'none';
   document.getElementById('client-card').style.display = 'block';
 }
 
@@ -316,16 +473,14 @@ function clearData() {
   chrome.storage.local.remove('visasproClientData');
   document.getElementById('client-card').style.display = 'none';
   document.getElementById('step1').style.display       = 'block';
-  document.getElementById('pdf-input').value = '';
+  document.getElementById('pdf-input').value           = '';
   hideAlert();
 }
 
 
 // ── UI helpers ───────────────────────────────────────────
 
-function showProgress(show) {
-  document.getElementById('progress-wrap').style.display = show ? 'block' : 'none';
-}
+function showProgress(show) { document.getElementById('progress-wrap').style.display = show ? 'block' : 'none'; }
 function setProgress(pct, msg) {
   document.getElementById('progress-fill').style.width = pct + '%';
   document.getElementById('progress-pct').textContent  = pct + '%';
@@ -335,15 +490,159 @@ function showAlert(msg, type) {
   const el = document.getElementById('alert');
   el.textContent = msg; el.className = `alert ${type}`; el.style.display = 'block';
 }
-function hideAlert() {
-  document.getElementById('alert').style.display = 'none';
+function hideAlert() { document.getElementById('alert').style.display = 'none'; }
+
+
+// ── Restaurar al abrir popup ─────────────────────────────
+
+
+
+// ── Configuración API Key ────────────────────────────────
+
+document.getElementById('btn-settings').addEventListener('click', () => {
+  const panel = document.getElementById('settings-panel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  if (panel.style.display === 'block') loadKeyStatus();
+});
+
+function loadKeyStatus() {
+  chrome.storage.local.get('vp_api_key', result => {
+    const status = document.getElementById('key-status');
+    if (result.vp_api_key) {
+      const masked = result.vp_api_key.slice(0, 12) + '...' + result.vp_api_key.slice(-4);
+      status.textContent = '✅ Key configurada: ' + masked;
+      status.style.color = '#276749';
+    } else {
+      status.textContent = '⚠️ Sin API key — Claude Vision no disponible';
+      status.style.color = '#9b1c1c';
+    }
+  });
 }
 
+document.getElementById('btn-save-key').addEventListener('click', () => {
+  const key = document.getElementById('api-key-input').value.trim();
+  if (!key.startsWith('sk-ant-')) {
+    document.getElementById('key-status').textContent = '❌ Formato inválido. Debe empezar con sk-ant-';
+    document.getElementById('key-status').style.color = '#9b1c1c';
+    return;
+  }
+  chrome.storage.local.set({ vp_api_key: key }, () => {
+    document.getElementById('api-key-input').value = '';
+    loadKeyStatus();
+  });
+});
 
-// ── Restaurar datos previos ──────────────────────────────
+document.getElementById('btn-clear-key').addEventListener('click', () => {
+  chrome.storage.local.remove('vp_api_key', () => {
+    document.getElementById('api-key-input').value = '';
+    loadKeyStatus();
+  });
+});
+
+// ── Claude Vision — extraer campos de PDF flatten ────────
+
+async function extractWithClaudeVision(buffer) {
+  const result = await chrome.storage.local.get('vp_api_key');
+  const apiKey = result.vp_api_key;
+
+  if (!apiKey) {
+    throw new Error('No hay API key configurada. Configúrala en ⚙️');
+  }
+
+  setProgress(60, 'Convirtiendo PDF a imágenes...');
+  const images = await pdfToImages(buffer, 150, 0.85);
+  console.log(`[VP] ${images.length} imágenes generadas`);
+
+  setProgress(70, 'Claude analizando las páginas...');
+
+  const messageContent = images.map(b64 => ({
+    type: 'image',
+    source: {
+      type: 'base64',
+      media_type: 'image/jpeg',
+      data: b64,
+    }
+  }));
+
+  messageContent.push({
+    type: 'text',
+    text: `Estas son las páginas de un formulario PDF de VisasPro para trámite de visa americana DS-160.
+Extrae TODOS los campos llenados y devuelve ÚNICAMENTE un JSON válido.
+Si un campo está vacío o dice "no aplica" / "n/a", omítelo del JSON.
+Devuelve SOLO el JSON sin texto adicional ni bloques de código markdown.
+
+Usa exactamente estos nombres de campo (incluye solo los que tengan valor):
+PI1_NOMBRE_SOLICITANTE, PI1_APELLIDOS_SOLICITANTE, PI1_GENERO, PI1_ESTADO_CIVIL,
+PI1_DIA_NACIMIENTO_SOLICITANTE, PI1_MES_NACIMIENTO_SOLICITANTE, PI1_ANO_NACIMIENTO_SOLICITANTE,
+PI1_CIUDAD_NACIMIENTO_SOLICITANTE, PI1_ESTADO_NACIMIENTO_SOLICITANTE, PI1_PAIS_REGION_SOLICITANTE,
+PI2_CURP, TRA_DIA_VIAJE, TRA_MES_VIAJE, TRA_ANO_VIAJE, TRA_DURACION_NUMERO, TRA_DURACION_UNIDAD,
+TRA_HOSPEDAJE_CALLE, TRA_HOSPEDAJE_CIUDAD, TRA_HOSPEDAJE_ESTADO, TRA_HOSPEDAJE_ZIP,
+TRA_QUIEN_PAGA_VIAJE, TRA_PAGA_VIAJE_NOMBRE, TRA_PAGA_VIAJE_APELLIDO, TRA_PAGA_VIAJE_TELEFONO,
+TRA_PAGA_VIAJE_PARENTESCO, TRA_COM_NOMBRE, TRA_COM_APELLIDO, TRA_COM_PARENTESCO,
+DIR_CALLE, DIR_CIUDAD, DIR_ESTADO, DIR_PAIS, DIR_ZIP, DIR_CELULAR, DIR_CORREO, DIR_RRSS, DIR_RRSS_USER,
+PAS_NUMBER, PAS_EMISION_CIUDAD, PAS_EMISION_ESTADO, PAS_EMISION_PAIS,
+PAS_EXP_DIA, PAS_EXP_MES, PAS_EXP_ANO, PAS_VEN_DIA, PAS_VEN_MES, PAS_VEN_ANO,
+CONTUSA_NOMBRE, CONTUSA_APELLIDO, CONTAUSA_PARENTESCO, CONTAUSA_CALLE, CONTAUSA_CIUDAD,
+CONTAUSA_ESTADO, CONTAUSA_ZIP, CONTAUSA_TEL,
+FAM_NOMBRE_PADRE, FAM_APELLIDO_PADRE, FAM_DIA_PADRE, FAM_MES_PADRE, FAM_ANO_PADRE,
+FAM_NOMBRE_MADRE, FAM_APELLIDO_MADRE, FAM_DIA_MADRE, FAM_MES_MADRE, FAM_ANO_MADRE,
+FAM_OTRO_FAMILIAR, WET_PRESENT_OCUPACION, WET_PRESENT_NOBRE_LUGAR,
+WET_PRESENT_CALLE, WET_PRESENT_CIUDAD, WET_PRESENT_ESTADO, WET_PRESENT_ZIP,
+WET_PRESENT_TEL, WET_PRESENT_INGRESO_DIA, WET_PRESENT_INGRESO_MES, WET_PRESENT_INGRESO_ANO,
+WET_PRESENT_INGRESO_MXN, WET_PRESENT_ACTIVIDADES`
+  });
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-opus-4-5',
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: messageContent }]
+    })
+  });
+
+  console.log('[VP] Claude Vision response status:', response.status);
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(`API error ${response.status}: ${err.error?.message || 'desconocido'}`);
+  }
+
+  const data = await response.json();
+  const text = data.content?.[0]?.text || '';
+  console.log('[VP] Claude text response:', text.slice(0, 300));
+
+  const clean = text.replace(/```json|```/g, '').trim();
+  const fields = JSON.parse(clean);
+  console.log('[VP] Campos extraídos por Claude:', Object.keys(fields).length);
+
+  return fields;
+}
+
+// ── Confirmación antes de usar Claude Vision ─────────────
+
+function askClaudeVision() {
+  return new Promise(resolve => {
+    const dialog = document.getElementById('vision-dialog');
+    dialog.style.display = 'flex';
+
+    document.getElementById('vision-confirm').onclick = () => {
+      dialog.style.display = 'none';
+      resolve(true);
+    };
+    document.getElementById('vision-cancel').onclick = () => {
+      dialog.style.display = 'none';
+      resolve(false);
+    };
+  });
+}
 
 chrome.storage.local.get('visasproClientData', result => {
-  if (result.visasproClientData) {
-    renderClientCard(result.visasproClientData);
-  }
+  if (result.visasproClientData) renderClientCard(result.visasproClientData);
 });
