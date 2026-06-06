@@ -348,6 +348,32 @@ document.getElementById('pdf-input').addEventListener('change', function(e) {
 
 document.getElementById('btn-clear').addEventListener('click', clearData);
 
+document.getElementById('btn-reprocess').addEventListener('click', async () => {
+  if (!window._vpLastBuffer) {
+    showAlert('No hay PDF en memoria. Vuelve a cargar el archivo.', 'error');
+    return;
+  }
+  try {
+    showProgress(true);
+    setProgress(55, 'Enviando a Claude Vision...');
+    const rawFields = await extractWithClaudeVision(window._vpLastBuffer);
+    const fieldCount = Object.keys(rawFields).length;
+    if (fieldCount < 5) throw new Error(`Claude solo extrajo ${fieldCount} campos.`);
+
+    setProgress(80, 'Aplicando reglas...');
+    const data = buildClientData(rawFields);
+    await chrome.storage.local.set({ visasproClientData: data });
+    renderClientCard(data);
+    setProgress(100, 'Listo');
+    showAlert(`Re-procesado con Claude Vision: ${fieldCount} campos.`, 'success');
+    setTimeout(() => showProgress(false), 800);
+  } catch (err) {
+    console.error('[VisasPro] Error en re-procesamiento:', err);
+    showProgress(false);
+    showAlert(err.message, 'error');
+  }
+});
+
 const SECTION_BTNS = [
   ['btn-pi1',       'pi1'],
   ['btn-pi2',       'pi2'],
@@ -395,9 +421,12 @@ async function processPDF(file) {
     let rawFields = parsePDFFields(buffer);
     let fieldCount = Object.keys(rawFields).length;
 
-    // PDF flatten detectado — ofrecer Claude Vision
-    if (fieldCount < 5) {
-      console.log('[VisasPro] PDF flatten detectado...');
+    // Guardar buffer para posible re-procesamiento manual con Claude Vision
+    window._vpLastBuffer = buffer;
+
+    // Si el parser AcroForm encuentra pocos campos, ofrecer Claude Vision
+    if (fieldCount < 30) {
+      console.log(`[VisasPro] Solo ${fieldCount} campos detectados, ofreciendo Claude Vision...`);
       const useVision = await askClaudeVision();
       if (!useVision) {
         throw new Error('Procesamiento cancelado. Pide al cliente que guarde el PDF con Adobe Acrobat Reader → Archivo → Guardar.');
