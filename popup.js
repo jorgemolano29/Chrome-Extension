@@ -390,10 +390,28 @@ const SECTION_BTNS = [
   ['btn-additional','additional'],
   ['btn-security',  'security'],
   ['btn-review',    'review'],
+  ['btn-next-page', 'nextPage'],
 ];
 
 for (const [btnId, section] of SECTION_BTNS) {
   document.getElementById(btnId).addEventListener('click', () => fillSection(section));
+}
+
+// Listeners para los botones "Next" de cada sección
+document.querySelectorAll('.btn-next').forEach(btn => {
+  btn.addEventListener('click', () => goToNextPage());
+});
+
+async function goToNextPage() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  chrome.tabs.sendMessage(tab.id, { action: 'nextPage' }, (response) => {
+    if (chrome.runtime.lastError) {
+      showAlert('Recarga la página del DS-160 y vuelve a intentar.', 'error'); return;
+    }
+    if (!response?.ok) {
+      showAlert('No se encontró botón Next en la página.', 'error');
+    }
+  });
 }
 
 async function fillSection(section) {

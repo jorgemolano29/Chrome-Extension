@@ -674,6 +674,23 @@ async function fillSecurity(data) {
 // ── Router ───────────────────────────────────────────────
 
 const SECTION_HANDLERS = {
+  nextPage: async () => {
+    // Suprimir el diálogo "¿Deseas abandonar el sitio?"
+    window.onbeforeunload = null;
+    window.addEventListener('beforeunload', e => {
+      e.stopImmediatePropagation();
+      delete e.returnValue;
+    }, { capture: true });
+
+    // Clic en el botón Next del CEAC
+    const nextBtn = document.getElementById('ctl00_SiteContentPlaceHolder_UpdateButton3');
+    if (nextBtn) {
+      nextBtn.click();
+      return 1;
+    }
+    console.warn('[VP] No se encontró el botón Next en esta página');
+    return 0;
+  },
   review: (data) => generateReviewPDF(data),
   pi1:        data => Promise.resolve(fillPI1(data)),
   pi2:        data => Promise.resolve(fillPI2(data)),
@@ -695,6 +712,23 @@ const SECTION_HANDLERS = {
 // ── Listener ─────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Avanzar a la siguiente página del CEAC
+  if (message.action === 'nextPage') {
+    const nextBtn = document.getElementById('ctl00_SiteContentPlaceHolder_UpdateButton3');
+    if (!nextBtn) { sendResponse({ ok: false, error: 'No se encontró botón Next' }); return false; }
+
+    // Suprimir el diálogo "¿Deseas abandonar el sitio?"
+    window.onbeforeunload = null;
+    window.addEventListener('beforeunload', e => {
+      e.stopImmediatePropagation();
+      delete e.returnValue;
+    }, { capture: true });
+
+    nextBtn.click();
+    sendResponse({ ok: true });
+    return false;
+  }
+
   if (message.action !== 'fill') return;
   chrome.storage.local.get('visasproClientData', async result => {
     const data = result.visasproClientData;
