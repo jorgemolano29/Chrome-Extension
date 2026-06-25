@@ -1,3 +1,46 @@
+import * as pdfjsLib from './lib/pdf.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.mjs');
+
+// ── Renderizar PDF a imágenes JPEG en escala de grises ────
+async function pdfToImages(buffer, dpi = 150, quality = 0.85) {
+  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
+  const pdf = await loadingTask.promise;
+  const scale = dpi / 72; // PDF nativo es 72 DPI
+
+  const images = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+
+    // Fondo blanco
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    // Convertir a escala de grises
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    for (let j = 0; j < data.length; j += 4) {
+      const gray = data[j] * 0.299 + data[j + 1] * 0.587 + data[j + 2] * 0.114;
+      data[j] = data[j + 1] = data[j + 2] = gray;
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    // Exportar como JPEG
+    const dataUrl = canvas.toDataURL('image/jpeg', quality);
+    const base64 = dataUrl.split(',')[1];
+    images.push(base64);
+    console.log(`[VP] Página ${i}/${pdf.numPages} renderizada (${Math.round(base64.length / 1024)} KB)`);
+  }
+
+  return images;
+}
+
 // ════════════════════════════════════════════════════════
 //  VISASPRO — POPUP.JS  v2.1
 // ════════════════════════════════════════════════════════
@@ -224,7 +267,8 @@ function buildClientData(f) {
     spouseBirthCountry:     p('PAREJA_PAIS'),
 
     // ── Trabajo actual ──
-    occupation:             p('WET_PRESENT_OCUPACION'),   // → tbxExplainOtherPresentOccupation
+    occupation:             p('WET_PRESENT_OCUPACION'),
+    occupationText:         processField('WET_PRESENT_OCUPACION_TEXT', (f['WET_PRESENT_OCUPACION'] || '').trim()),
     employer:               p('WET_PRESENT_NOBRE_LUGAR'),
     workStreet:             p('WET_PRESENT_CALLE'),
     workCity:               p('WET_PRESENT_CIUDAD'),
@@ -304,6 +348,32 @@ document.getElementById('pdf-input').addEventListener('change', function(e) {
 
 document.getElementById('btn-clear').addEventListener('click', clearData);
 
+document.getElementById('btn-reprocess').addEventListener('click', async () => {
+  if (!window._vpLastBuffer) {
+    showAlert('No hay PDF en memoria. Vuelve a cargar el archivo.', 'error');
+    return;
+  }
+  try {
+    showProgress(true);
+    setProgress(55, 'Enviando a Claude Vision...');
+    const rawFields = await extractWithClaudeVision(window._vpLastBuffer);
+    const fieldCount = Object.keys(rawFields).length;
+    if (fieldCount < 5) throw new Error(`Claude solo extrajo ${fieldCount} campos.`);
+
+    setProgress(80, 'Aplicando reglas...');
+    const data = buildClientData(rawFields);
+    await chrome.storage.local.set({ visasproClientData: data });
+    renderClientCard(data);
+    setProgress(100, 'Listo');
+    showAlert(`Re-procesado con Claude Vision: ${fieldCount} campos.`, 'success');
+    setTimeout(() => showProgress(false), 800);
+  } catch (err) {
+    console.error('[VisasPro] Error en re-procesamiento:', err);
+    showProgress(false);
+    showAlert(err.message, 'error');
+  }
+});
+
 const SECTION_BTNS = [
   ['btn-pi1',       'pi1'],
   ['btn-pi2',       'pi2'],
@@ -317,11 +387,30 @@ const SECTION_BTNS = [
   ['btn-spouse',    'spouse'],
   ['btn-work',      'work'],
   ['btn-workprev',  'workPrev'],
+  ['btn-additional','additional'],
   ['btn-security',  'security'],
+  ['btn-review',    'review'],
 ];
 
 for (const [btnId, section] of SECTION_BTNS) {
   document.getElementById(btnId).addEventListener('click', () => fillSection(section));
+}
+
+// Listeners para los botones "Next" de cada sección
+document.querySelectorAll('.btn-next').forEach(btn => {
+  btn.addEventListener('click', () => goToNextPage());
+});
+
+async function goToNextPage() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  chrome.tabs.sendMessage(tab.id, { action: 'nextPage' }, (response) => {
+    if (chrome.runtime.lastError) {
+      showAlert('Recarga la página del DS-160 y vuelve a intentar.', 'error'); return;
+    }
+    if (!response?.ok) {
+      showAlert('No se encontró botón Next en la página.', 'error');
+    }
+  });
 }
 
 async function fillSection(section) {
@@ -346,11 +435,26 @@ async function processPDF(file) {
   try {
     const buffer = await file.arrayBuffer();
     setProgress(30, 'Extrayendo campos...');
-    const rawFields = parsePDFFields(buffer);
-    const fieldCount = Object.keys(rawFields).length;
+    let rawFields = parsePDFFields(buffer);
+    let fieldCount = Object.keys(rawFields).length;
+
+    // Guardar buffer para posible re-procesamiento manual con Claude Vision
+    window._vpLastBuffer = buffer;
+
+    // Si el parser AcroForm encuentra pocos campos, ofrecer Claude Vision
+    if (fieldCount < 30) {
+      console.log(`[VisasPro] Solo ${fieldCount} campos detectados, ofreciendo Claude Vision...`);
+      const useVision = await askClaudeVision();
+      if (!useVision) {
+        throw new Error('Procesamiento cancelado. Pide al cliente que guarde el PDF con Adobe Acrobat Reader → Archivo → Guardar.');
+      }
+      setProgress(55, 'Enviando a Claude Vision...');
+      rawFields = await extractWithClaudeVision(buffer);
+      fieldCount = Object.keys(rawFields).length;
+    }
 
     if (fieldCount < 5)
-      throw new Error(`Solo se encontraron ${fieldCount} campos. ¿Es el formulario VisasPro correcto?`);
+      throw new Error(`No se pudieron extraer datos del PDF (${fieldCount} campos). Verifica que sea el formulario VisasPro correcto.`);
 
     setProgress(55, 'Aplicando reglas...');
     const data = buildClientData(rawFields);
@@ -436,6 +540,154 @@ function hideAlert() { document.getElementById('alert').style.display = 'none'; 
 
 
 // ── Restaurar al abrir popup ─────────────────────────────
+
+
+
+// ── Configuración API Key ────────────────────────────────
+
+document.getElementById('btn-settings').addEventListener('click', () => {
+  const panel = document.getElementById('settings-panel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  if (panel.style.display === 'block') loadKeyStatus();
+});
+
+function loadKeyStatus() {
+  chrome.storage.local.get('vp_api_key', result => {
+    const status = document.getElementById('key-status');
+    if (result.vp_api_key) {
+      const masked = result.vp_api_key.slice(0, 12) + '...' + result.vp_api_key.slice(-4);
+      status.textContent = '✅ Key configurada: ' + masked;
+      status.style.color = '#276749';
+    } else {
+      status.textContent = '⚠️ Sin API key — Claude Vision no disponible';
+      status.style.color = '#9b1c1c';
+    }
+  });
+}
+
+document.getElementById('btn-save-key').addEventListener('click', () => {
+  const key = document.getElementById('api-key-input').value.trim();
+  if (!key.startsWith('sk-ant-')) {
+    document.getElementById('key-status').textContent = '❌ Formato inválido. Debe empezar con sk-ant-';
+    document.getElementById('key-status').style.color = '#9b1c1c';
+    return;
+  }
+  chrome.storage.local.set({ vp_api_key: key }, () => {
+    document.getElementById('api-key-input').value = '';
+    loadKeyStatus();
+  });
+});
+
+document.getElementById('btn-clear-key').addEventListener('click', () => {
+  chrome.storage.local.remove('vp_api_key', () => {
+    document.getElementById('api-key-input').value = '';
+    loadKeyStatus();
+  });
+});
+
+// ── Claude Vision — extraer campos de PDF flatten ────────
+
+async function extractWithClaudeVision(buffer) {
+  const result = await chrome.storage.local.get('vp_api_key');
+  const apiKey = result.vp_api_key;
+
+  if (!apiKey) {
+    throw new Error('No hay API key configurada. Configúrala en ⚙️');
+  }
+
+  setProgress(60, 'Convirtiendo PDF a imágenes...');
+  const images = await pdfToImages(buffer, 150, 0.85);
+  console.log(`[VP] ${images.length} imágenes generadas`);
+
+  setProgress(70, 'Claude analizando las páginas...');
+
+  const messageContent = images.map(b64 => ({
+    type: 'image',
+    source: {
+      type: 'base64',
+      media_type: 'image/jpeg',
+      data: b64,
+    }
+  }));
+
+  messageContent.push({
+    type: 'text',
+    text: `Estas son las páginas de un formulario PDF de VisasPro para trámite de visa americana DS-160.
+Extrae TODOS los campos llenados y devuelve ÚNICAMENTE un JSON válido.
+Si un campo está vacío o dice "no aplica" / "n/a", omítelo del JSON.
+Devuelve SOLO el JSON sin texto adicional ni bloques de código markdown.
+
+Usa exactamente estos nombres de campo (incluye solo los que tengan valor):
+PI1_NOMBRE_SOLICITANTE, PI1_APELLIDOS_SOLICITANTE, PI1_GENERO, PI1_ESTADO_CIVIL,
+PI1_DIA_NACIMIENTO_SOLICITANTE, PI1_MES_NACIMIENTO_SOLICITANTE, PI1_ANO_NACIMIENTO_SOLICITANTE,
+PI1_CIUDAD_NACIMIENTO_SOLICITANTE, PI1_ESTADO_NACIMIENTO_SOLICITANTE, PI1_PAIS_REGION_SOLICITANTE,
+PI2_CURP, TRA_DIA_VIAJE, TRA_MES_VIAJE, TRA_ANO_VIAJE, TRA_DURACION_NUMERO, TRA_DURACION_UNIDAD,
+TRA_HOSPEDAJE_CALLE, TRA_HOSPEDAJE_CIUDAD, TRA_HOSPEDAJE_ESTADO, TRA_HOSPEDAJE_ZIP,
+TRA_QUIEN_PAGA_VIAJE, TRA_PAGA_VIAJE_NOMBRE, TRA_PAGA_VIAJE_APELLIDO, TRA_PAGA_VIAJE_TELEFONO,
+TRA_PAGA_VIAJE_PARENTESCO, TRA_COM_NOMBRE, TRA_COM_APELLIDO, TRA_COM_PARENTESCO,
+DIR_CALLE, DIR_CIUDAD, DIR_ESTADO, DIR_PAIS, DIR_ZIP, DIR_CELULAR, DIR_CORREO, DIR_RRSS, DIR_RRSS_USER,
+PAS_NUMBER, PAS_EMISION_CIUDAD, PAS_EMISION_ESTADO, PAS_EMISION_PAIS,
+PAS_EXP_DIA, PAS_EXP_MES, PAS_EXP_ANO, PAS_VEN_DIA, PAS_VEN_MES, PAS_VEN_ANO,
+CONTUSA_NOMBRE, CONTUSA_APELLIDO, CONTAUSA_PARENTESCO, CONTAUSA_CALLE, CONTAUSA_CIUDAD,
+CONTAUSA_ESTADO, CONTAUSA_ZIP, CONTAUSA_TEL,
+FAM_NOMBRE_PADRE, FAM_APELLIDO_PADRE, FAM_DIA_PADRE, FAM_MES_PADRE, FAM_ANO_PADRE,
+FAM_NOMBRE_MADRE, FAM_APELLIDO_MADRE, FAM_DIA_MADRE, FAM_MES_MADRE, FAM_ANO_MADRE,
+FAM_OTRO_FAMILIAR, WET_PRESENT_OCUPACION, WET_PRESENT_NOBRE_LUGAR,
+WET_PRESENT_CALLE, WET_PRESENT_CIUDAD, WET_PRESENT_ESTADO, WET_PRESENT_ZIP,
+WET_PRESENT_TEL, WET_PRESENT_INGRESO_DIA, WET_PRESENT_INGRESO_MES, WET_PRESENT_INGRESO_ANO,
+WET_PRESENT_INGRESO_MXN, WET_PRESENT_ACTIVIDADES`
+  });
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-opus-4-5',
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: messageContent }]
+    })
+  });
+
+  console.log('[VP] Claude Vision response status:', response.status);
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(`API error ${response.status}: ${err.error?.message || 'desconocido'}`);
+  }
+
+  const data = await response.json();
+  const text = data.content?.[0]?.text || '';
+  console.log('[VP] Claude text response:', text.slice(0, 300));
+
+  const clean = text.replace(/```json|```/g, '').trim();
+  const fields = JSON.parse(clean);
+  console.log('[VP] Campos extraídos por Claude:', Object.keys(fields).length);
+
+  return fields;
+}
+
+// ── Confirmación antes de usar Claude Vision ─────────────
+
+function askClaudeVision() {
+  return new Promise(resolve => {
+    const dialog = document.getElementById('vision-dialog');
+    dialog.style.display = 'flex';
+
+    document.getElementById('vision-confirm').onclick = () => {
+      dialog.style.display = 'none';
+      resolve(true);
+    };
+    document.getElementById('vision-cancel').onclick = () => {
+      dialog.style.display = 'none';
+      resolve(false);
+    };
+  });
+}
 
 chrome.storage.local.get('visasproClientData', result => {
   if (result.visasproClientData) renderClientCard(result.visasproClientData);

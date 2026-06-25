@@ -490,12 +490,20 @@ const EQUIV = {
     'Otro/No lo se':                                                            'O',
   },
 
-  occupation: {
+// Código para ddlPresentOccupation
+  occupationCode: {
     'Empleado':    'O',
     'Estudiante':  'S',
     'Retirado':    'RT',
     'Desempleado': 'N',
     'Otro':        'O',
+  },
+
+  // Texto en inglés para tbxExplainOtherPresentOccupation
+  occupationText: {
+    'Empleado':    'EMPLOYEE',
+    'Desempleado': 'UNEMPLOYED',
+    'Otro':        'OTHER',
   },
 
   // Países (para viajes previos, pasaporte, trabajo anterior)
@@ -878,7 +886,8 @@ const FIELD_RULES = {
   'WET_PRESENT_TEL':                   { clean: 'phone'             },
   'WET_PRESENT_INGRESO_MES':           { equiv: 'month'             },
   'WET_PRESENT_ACTIVIDADES':           { clean: 'text', translate: true },
-  'WET_PRESENT_OCUPACION':             { equiv: 'occupation'        },
+  'WET_PRESENT_OCUPACION':             { equiv: 'occupationCode'    },
+  'WET_PRESENT_OCUPACION_TEXT':        { equiv: 'occupationText'    },
 
   // ── Trabajo anterior ──
   'WET_PREV_NOMBRE':                   { clean: 'text'              },
