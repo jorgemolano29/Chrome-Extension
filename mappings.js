@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════
-//  VISASPRO — MAPPINGS.JS  v2.0
+//  VISASPRO — MAPPINGS.JS  v1.15.0
 //  Fuente: Definiciones_Extension_VisasPro_-_AutoFiller.xlsx
 // ════════════════════════════════════════════════════════
 
@@ -40,6 +40,13 @@ const CLEAN = {
     .trim()
     .replace(/[^\d]/g, '')
     .slice(-8),
+
+  // Solo el número entero, sin signo de pesos, comas ni decimales
+  // (ej. "$15,000.00 MXN" -> "15000"). El DS-160 exige puro numérico.
+  salary: (val) => (val || '')
+    .trim()
+    .replace(/[^\d.]/g, '')
+    .split('.')[0],
 };
 
 
@@ -113,6 +120,7 @@ const EQUIV = {
     'Mexico - Veracruz':            'VER',
     'Mexico - Yucatan':             'YUC',
     'Mexico - Zacatecas':           'ZAC',
+    'ESTADOS UNIDOS DE AMERICA':    'USA',
     'AFGANISTAN':                   'AFGH',
     'ALBANIA':                      'ALB',
     'ALEMANIA':                     'GER',
@@ -140,7 +148,6 @@ const EQUIV = {
     'BIELORRUSIA':                  'BYS',
     'BIRMANIA':                     'BURM',
     'BOLIVIA':                      'BOL',
-    'BONAIRE':                      'BON',
     'BOSNIA-HERZEGOVINA':           'BIH',
     'BOTSUANA':                     'BOT',
     'BRASIL':                       'BRZL',
@@ -197,10 +204,8 @@ const EQUIV = {
     'GRANADA':                      'GREN',
     'GRECIA':                       'GRC',
     'GROENLANDIA':                  'GRLD',
-    'GUADALUPE':                    'GUAD',
     'GUAM':                         'GUAM',
     'GUATEMALA':                    'GUAT',
-    'GUAYANA FRANCESA':             'FRGN',
     'GUINEA':                       'GNEA',
     'GUINEA ECUATORIAL':            'EGN',
     'GUINEA BISAU':                 'GUIB',
@@ -208,6 +213,7 @@ const EQUIV = {
     'HAITI':                        'HAT',
     'HONDURAS':                     'HOND',
     'HONG KONG':                    'HNK',
+    'HONG KONG BNO':                'HOKO',
     'HUNGRIA':                      'HUNG',
     'INDIA':                        'IND',
     'INDONESIA':                    'IDSA',
@@ -219,7 +225,6 @@ const EQUIV = {
     'ISLA HOWLAND':                 'XHI',
     'ISLA MALDEN':                  'MLDI',
     'ISLA NORFOLK':                 'NFK',
-    'ISLA SABA':                    'SABA',
     'ISLA WAKE':                    'WKI',
     'ISLANDIA':                     'ICLD',
     'ISLAS CAIMAN':                 'CAYI',
@@ -267,7 +272,6 @@ const EQUIV = {
     'MALI':                         'MALI',
     'MALTA':                        'MLTA',
     'MARRUECOS':                    'MORO',
-    'MARTINICA':                    'MART',
     'MAURICIO':                     'MRTS',
     'MAURITANIA':                   'MAUR',
     'MAYOTTE':                      'MYT',
@@ -304,7 +308,6 @@ const EQUIV = {
     'REPUBLICA CENTROAFRICANA':     'CAFR',
     'REPUBLICA CHECA':              'CZEC',
     'REPUBLICA DOMINICANA':         'DOMR',
-    'REUNION':                      'REUN',
     'RUANDA':                       'RWND',
     'RUMANIA':                      'ROM',
     'RUSIA':                        'RUS',
@@ -313,10 +316,10 @@ const EQUIV = {
     'SAMOA':                        'WSAM',
     'SAMOA AMERICANA':              'ASMO',
     'SAN CRISTOBAL Y NIEVES':       'STCN',
-    'SAN EUSTAQUIO':                'STEU',
     'SAN MARINO':                   'SMAR',
     'SAN PEDRO Y MIQUELON':         'SPMI',
     'SAN VICENTE Y LAS GRANADINAS': 'STVN',
+    'SAN BARTOLOME':                'STBR',
     'SANTA ELENA':                  'SHEL',
     'SANTA LUCIA':                  'SLCA',
     'SANTA SEDE CIUDAD DEL VATICANO': 'VAT',
@@ -369,6 +372,13 @@ const EQUIV = {
     'Dia(s)':    'D',
     'Semana(s)': 'W',
     'Mes(es)':   'M',
+    // No se conoce el /value interno de estas dos opciones en el <select> de CEAC
+    // (no se han visto casos reales aún) — se mapean al texto visible de la opción,
+    // que fillSelect() también acepta como coincidencia (compara value Y text).
+    // Si algún cliente cae en "Menos de 24 Horas" y el texto exacto del PDF no
+    // coincide con esta clave, revisar y ajustar la clave española.
+    'Ano(s)':            'Year(s)',
+    'Menos de 24 Horas': 'Less Than 24 Hours',
   },
 
   // Estados de EUA (hospedaje y contacto)
@@ -508,7 +518,7 @@ const EQUIV = {
 
   // Países (para viajes previos, pasaporte, trabajo anterior)
   countries: {
-    'MEXICO':                       'MXN',
+    'MEXICO':                       'MEX',
     'ESTADOS UNIDOS DE AMERICA':    'USA',
     'AFGANISTAN':                   'AFGH',
     'ALBANIA':                      'ALB',
@@ -762,15 +772,6 @@ const EQUIV = {
     'ZIMBABUE':                     'ZIMB',
   },
 
-  language: {
-    'Espanol':   'SPANISH',
-    'Ingles':    'ENGLISH',
-    'Frances':   'FRENCH',
-    'Aleman':    'GERMAN',
-    'Italiano':  'ITALIAN',
-    'Portugues': 'PORTUGUESE',
-  },
-
 };
 
 
@@ -885,6 +886,7 @@ const FIELD_RULES = {
   'WET_PRESENT_ZIP':                   { clean: 'zip'               },
   'WET_PRESENT_TEL':                   { clean: 'phone'             },
   'WET_PRESENT_INGRESO_MES':           { equiv: 'month'             },
+  'WET_PRESENT_INGRESO_MXN':           { clean: 'salary'            },
   'WET_PRESENT_ACTIVIDADES':           { clean: 'text', translate: true },
   'WET_PRESENT_OCUPACION':             { equiv: 'occupationCode'    },
   'WET_PRESENT_OCUPACION_TEXT':        { equiv: 'occupationText'    },
@@ -916,9 +918,11 @@ const FIELD_RULES = {
   'EST_SALIDA_MES':                    { equiv: 'month'             },
 
   // ── Adicional ──
-  'ADD_IDIOMA_1':                      { equiv: 'language'          },
-  'ADD_IDIOMA_2':                      { equiv: 'language'          },
-  'ADD_IDIOMA_3':                      { equiv: 'language'          },
+  // Traducción real vía Claude en vez de tabla fija — cubre cualquier idioma, no
+  // solo los 6 que tenía EQUIV.language (decisión del usuario, 2026-08-11).
+  'ADD_IDIOMA_1':                      { clean: 'text', translate: true },
+  'ADD_IDIOMA_2':                      { clean: 'text', translate: true },
+  'ADD_IDIOMA_3':                      { clean: 'text', translate: true },
   'ADD_PAIS_1':                        { equiv: 'countries'         },
   'ADD_PAIS_2':                        { equiv: 'countries'         },
   'ADD_PAIS_3':                        { equiv: 'countries'         },

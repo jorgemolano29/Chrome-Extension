@@ -42,12 +42,13 @@ async function pdfToImages(buffer, dpi = 150, quality = 0.85) {
 }
 
 // ════════════════════════════════════════════════════════
-//  VISASPRO — POPUP.JS  v2.1
+//  VISASPRO — POPUP.JS  v1.15.0
 // ════════════════════════════════════════════════════════
 
-// ⚠️  Reemplaza con tu API key de Anthropic
-//     Obtén una en: https://console.anthropic.com
-const ANTHROPIC_API_KEY = 'sk-ant-XXXXXXXXXXXXXXXXXXXXXXXX';
+// La API key real se lee de chrome.storage.local ('vp_api_key', configurada en ⚙️).
+// Antes había una constante hardcodeada con un placeholder inválido que translateFields()
+// usaba en vez de la key guardada — la traducción fallaba en silencio (ver
+// CONTEXTO_PROYECTO.md, v1.5.1).
 
 
 // ── Parser PDF ──────────────────────────────────────────
@@ -63,6 +64,24 @@ function parsePDFFields(buffer) {
   while ((m = objRe.exec(pdf)) !== null) objIndex[m[1]] = m[2];
 
   function decodePDFString(s) {
+    // Cadenas con acentos (ñ, á, é...) vienen en UTF-16BE con BOM (FE FF + 2 bytes
+    // por carácter). Si no se decodifican, el BOM sobrevive a la limpieza de acentos
+    // como una "Y" espuria al inicio del valor (ver CONTEXTO_PROYECTO.md).
+    if (s.charCodeAt(0) === 0xFE && s.charCodeAt(1) === 0xFF) {
+      // El PDF escapa "(" ")" "\" con una barra invertida aunque el texto esté en
+      // UTF-16BE (son delimitadores de cadena para el propio formato PDF, no del
+      // encoding). Hay que quitar esos escapes ANTES de reagrupar bytes de a 2 en 2,
+      // si no la barra invertida desalinea el resto de la cadena (ej. "Día(s)" nunca
+      // decodificaba bien por los paréntesis — ver CONTEXTO_PROYECTO.md).
+      const unescaped = s
+        .replace(/\\(\d{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)))
+        .replace(/\\\(/g, '(').replace(/\\\)/g, ')').replace(/\\\\/g, '\\');
+      let out = '';
+      for (let i = 2; i < unescaped.length - 1; i += 2) {
+        out += String.fromCharCode((unescaped.charCodeAt(i) << 8) | unescaped.charCodeAt(i + 1));
+      }
+      return out.replace(/\s+/g, ' ').trim();
+    }
     return s
       .replace(/\\(\d{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)))
       .replace(/\\n/g, '\n').replace(/\\r/g, '').replace(/\\t/g, '\t')
@@ -101,7 +120,15 @@ function parsePDFFields(buffer) {
 // ── Traducción automática ES→EN via Claude API ───────────
 
 async function translateFields(fieldsToTranslate) {
-  if (!fieldsToTranslate || Object.keys(fieldsToTranslate).length === 0) return {};
+  if (!fieldsToTranslate || Object.keys(fieldsToTranslate).length === 0) {
+    return { translated: {}, ok: true };
+  }
+
+  const { vp_api_key: apiKey } = await chrome.storage.local.get('vp_api_key');
+  if (!apiKey) {
+    console.warn('[VisasPro] No hay API key configurada — se omite la traducción, quedan los textos en español.');
+    return { translated: fieldsToTranslate, ok: false, reason: 'no-api-key' };
+  }
 
   const prompt = [
     'You are translating fields from a Mexican visa application form from Spanish to English.',
@@ -118,7 +145,7 @@ async function translateFields(fieldsToTranslate) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
+        'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true',
       },
@@ -136,10 +163,154 @@ async function translateFields(fieldsToTranslate) {
     const raw = data.content?.[0]?.text || '{}';
     const translated = JSON.parse(raw.replace(/```json|```/g, '').trim());
     console.log('[VisasPro] Traducciones obtenidas:', translated);
-    return translated;
+    return { translated, ok: true };
   } catch (err) {
     console.error('[VisasPro] Error en traducción:', err);
-    return fieldsToTranslate; // fallback: devolver originales
+    return { translated: fieldsToTranslate, ok: false, reason: err.message }; // fallback: devolver originales
+  }
+}
+
+
+// ── Matching de países (Adicional → países visitados) via Claude ────────
+//  A diferencia de idiomas (traducción libre), aquí el problema es matching contra
+//  una lista CERRADA de ~190 opciones válidas del DS-160 (EQUIV.countries en
+//  mappings.js) — el PDF puede traer variantes ("EEUU", "Holanda" en vez de "Países
+//  Bajos", etc.) que la tabla fija no cubre. Se le pasa a Claude el texto crudo +
+//  la lista completa de opciones válidas, y se le pide el código exacto. Decisión del
+//  usuario, 2026-08-11 — ver CONTEXTO_PROYECTO.md.
+
+async function matchCountriesWithAI(rawCountries) {
+  const entries = Object.entries(rawCountries).filter(([, v]) => v && v.trim());
+  if (entries.length === 0) return { matched: {}, ok: true };
+
+  const { vp_api_key: apiKey } = await chrome.storage.local.get('vp_api_key');
+  if (!apiKey) {
+    console.warn('[VisasPro] No hay API key configurada — se omite el matching de países con IA, se usa la tabla fija.');
+    return { matched: {}, ok: false, reason: 'no-api-key' };
+  }
+
+  const validOptions = Object.entries(EQUIV.countries)
+    .map(([name, code]) => `${code}::${name}`)
+    .join('\n');
+
+  const prompt = [
+    'You are matching country names extracted from a Mexican visa application PDF',
+    'to the exact country code accepted by the DS-160 visa form dropdown.',
+    'The input text may be misspelled, abbreviated, or use an alternate/informal name',
+    '(e.g. "EEUU" for the United States, "Holanda" for "Países Bajos").',
+    'Below is the list of VALID options, one per line, in the format CODE::NAME.',
+    'For each input field, return the CODE of the single best matching option.',
+    'If you are not reasonably confident of a match, return null for that field.',
+    'Respond ONLY with a valid JSON object mapping the same keys to the matched code',
+    '(or null). Do not include any explanation, markdown, or extra text.',
+    '',
+    'Valid options:',
+    validOptions,
+    '',
+    'Fields to match:',
+    JSON.stringify(Object.fromEntries(entries), null, 2),
+  ].join('\n');
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 500,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(`API error ${response.status}: ${err?.error?.message || 'desconocido'}`);
+    }
+    const data = await response.json();
+    const raw = data.content?.[0]?.text || '{}';
+    const matched = JSON.parse(raw.replace(/```json|```/g, '').trim());
+    console.log('[VisasPro] Países emparejados con IA:', matched);
+    return { matched, ok: true };
+  } catch (err) {
+    console.error('[VisasPro] Error en matching de países:', err);
+    return { matched: {}, ok: false, reason: err.message }; // fallback: se usa la tabla fija ya calculada
+  }
+}
+
+
+// ── Identificación de lugar de nacimiento (PI1 → ddlAPP_POB_CNTRY) via Claude ──
+//  El campo PDF PI1_PAIS_REGION_SOLICITANTE no siempre viene en el PDF de VisasPro.
+//  Cuando falta, se usa birthCity + birthState (que el PDF sí trae) para que la IA
+//  determine la opción correcta de la lista cerrada de EQUIV.paisRegion (32 estados
+//  de México + resto de países del mundo — el select real del DS-160 mezcla ambos).
+//  Si no está segura, se deja el campo sin seleccionar y se avisa. Decisión del
+//  usuario, 2026-08-11 — ver CONTEXTO_PROYECTO.md.
+
+async function matchBirthPlaceWithAI(birthCity, birthState) {
+  const hasData = (birthCity && birthCity.trim()) || (birthState && birthState.trim());
+  if (!hasData) return { code: null, ok: true };
+
+  const { vp_api_key: apiKey } = await chrome.storage.local.get('vp_api_key');
+  if (!apiKey) {
+    console.warn('[VisasPro] No hay API key configurada — se omite la identificación del lugar de nacimiento con IA.');
+    return { code: null, ok: false, reason: 'no-api-key' };
+  }
+
+  const validOptions = Object.entries(EQUIV.paisRegion)
+    .map(([name, code]) => `${code}::${name}`)
+    .join('\n');
+
+  const prompt = [
+    'You are determining the place of birth (country, or Mexican state if born in Mexico)',
+    'of an applicant on a Mexican visa application, for the DS-160 visa form dropdown.',
+    'Below is the list of VALID options, one per line, in the format CODE::NAME.',
+    'Mexican options are state-level ("Mexico - <state>"); every other country is',
+    'listed as a whole (not by state/province).',
+    'Given the city and/or state of birth below (may be in Spanish, misspelled, or',
+    'informal), return the CODE of the single best matching option.',
+    'If you are not reasonably confident of a match, return null.',
+    'Respond ONLY with a valid JSON object: {"code": "<CODE or null>"}.',
+    'Do not include any explanation, markdown, or extra text.',
+    '',
+    'Valid options:',
+    validOptions,
+    '',
+    `Birth city: ${birthCity || '(sin dato)'}`,
+    `Birth state/province: ${birthState || '(sin dato)'}`,
+  ].join('\n');
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 200,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(`API error ${response.status}: ${err?.error?.message || 'desconocido'}`);
+    }
+    const data = await response.json();
+    const raw = data.content?.[0]?.text || '{}';
+    const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
+    const code = (parsed.code && parsed.code !== 'null') ? parsed.code : null;
+    console.log('[VisasPro] Lugar de nacimiento identificado con IA:', code);
+    return { code, ok: true };
+  } catch (err) {
+    console.error('[VisasPro] Error en identificación de lugar de nacimiento:', err);
+    return { code: null, ok: false, reason: err.message };
   }
 }
 
@@ -161,7 +332,7 @@ function buildClientData(f) {
     dob_year:               r('PI1_ANO_NACIMIENTO_SOLICITANTE'),
     birthCity:              p('PI1_CIUDAD_NACIMIENTO_SOLICITANTE'),
     birthState:             p('PI1_ESTADO_NACIMIENTO_SOLICITANTE'),
-    nationality:            p('PI1_PAIS_REGION_SOLICITANTE'),
+    birthCountryRegion:     p('PI1_PAIS_REGION_SOLICITANTE'),
 
     // ── Información Personal 2 ──
     curp:                   p('PI2_CURP'),
@@ -278,7 +449,7 @@ function buildClientData(f) {
     workStart_day:          r('WET_PRESENT_INGRESO_DIA'),
     workStart_month:        p('WET_PRESENT_INGRESO_MES'),
     workStart_year:         r('WET_PRESENT_INGRESO_ANO'),
-    workSalary:             r('WET_PRESENT_INGRESO_MXN'),
+    workSalary:             p('WET_PRESENT_INGRESO_MXN'),
     workDuties:             p('WET_PRESENT_ACTIVIDADES'), // TRANSLATE
 
     // ── Trabajo anterior / Estudios ──
@@ -334,6 +505,9 @@ const TRANSLATE_KEY_MAP = {
   'WET_PREV_PUESTO':         'prevJobTitle',
   'WET_PREV_ACTIVIDADES':    'prevWorkDuties',
   'EST_CURSO':               'schoolCourse',
+  'ADD_IDIOMA_1':            'language1',
+  'ADD_IDIOMA_2':            'language2',
+  'ADD_IDIOMA_3':            'language3',
 };
 
 
@@ -396,22 +570,6 @@ for (const [btnId, section] of SECTION_BTNS) {
   document.getElementById(btnId).addEventListener('click', () => fillSection(section));
 }
 
-// Listeners para los botones "Next" de cada sección
-document.querySelectorAll('.btn-next').forEach(btn => {
-  btn.addEventListener('click', () => goToNextPage());
-});
-
-async function goToNextPage() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  chrome.tabs.sendMessage(tab.id, { action: 'nextPage' }, (response) => {
-    if (chrome.runtime.lastError) {
-      showAlert('Recarga la página del DS-160 y vuelve a intentar.', 'error'); return;
-    }
-    if (!response?.ok) {
-      showAlert('No se encontró botón Next en la página.', 'error');
-    }
-  });
-}
 
 async function fillSection(section) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -420,7 +578,10 @@ async function fillSection(section) {
       showAlert('Recarga la página del DS-160 y vuelve a intentar.', 'error'); return;
     }
     if (response && response.ok) {
-      showAlert(`${section.toUpperCase()} — ${response.filled} campos llenados.`, 'success');
+      let msg = `${section.toUpperCase()} — ${response.filled} campos llenados.`;
+      const hasNotices = response.notices && response.notices.length;
+      if (hasNotices) msg += ' ⚠️ ' + response.notices.join(' ');
+      showAlert(msg, hasNotices ? 'warning' : 'success');
     } else {
       showAlert(`Error: ${response?.error || 'desconocido'}`, 'error');
     }
@@ -460,26 +621,112 @@ async function processPDF(file) {
     const data = buildClientData(rawFields);
 
     const toTranslate = getTranslatableFields(rawFields);
+    let translationOk = true, translationReason = null;
     if (Object.keys(toTranslate).length > 0) {
       setProgress(75, 'Traduciendo campos...');
-      const translations = await translateFields(toTranslate);
-      for (const [pdfKey, translated] of Object.entries(translations)) {
+      const result = await translateFields(toTranslate);
+      translationOk = result.ok;
+      translationReason = result.reason;
+      for (const [pdfKey, translated] of Object.entries(result.translated)) {
         const dataKey = TRANSLATE_KEY_MAP[pdfKey];
         if (dataKey && translated) data[dataKey] = translated;
       }
+    }
+
+    // Países visitados: matching contra la lista cerrada de opciones válidas vía IA
+    // (data.country1/2/3 ya tienen el valor de la tabla fija EQUIV.countries como
+    // respaldo, calculado en buildClientData — la IA solo lo sobrescribe si está
+    // segura de un mejor match).
+    const rawCountries = {
+      country1: rawFields['ADD_PAIS_1'],
+      country2: rawFields['ADD_PAIS_2'],
+      country3: rawFields['ADD_PAIS_3'],
+    };
+    const hasCountries = Object.values(rawCountries).some(v => v && v.trim());
+    let countryMatchOk = true, countryMatchReason = null;
+    if (hasCountries) {
+      setProgress(85, 'Identificando países visitados...');
+      const countryResult = await matchCountriesWithAI(rawCountries);
+      countryMatchOk = countryResult.ok;
+      countryMatchReason = countryResult.reason;
+      for (const [dataKey, code] of Object.entries(countryResult.matched)) {
+        if (code && code !== 'null') data[dataKey] = code;
+      }
+    }
+
+    // Lugar de nacimiento (país o estado de México): PI1_PAIS_REGION_SOLICITANTE no
+    // siempre trae un código utilizable — puede faltar, o venir con un valor genérico
+    // como "Mexico" que no tiene equivalencia directa en EQUIV.paisRegion (ese select
+    // no tiene una opción plana "MEXICO", solo "MEXICO - <ESTADO>"). En ese caso
+    // processField devuelve el texto crudo sin resolver, que NO es un código válido
+    // del select real — hay que detectarlo así en vez de solo revisar si está vacío,
+    // o el fillSelect del content script falla en silencio. Se usa birthCity +
+    // birthState (que el PDF sí trae) para que la IA determine la opción correcta.
+    const validBirthPlaceCodes = new Set(Object.values(EQUIV.paisRegion));
+    let birthPlaceOk = true, birthPlaceReason = null;
+    const needsBirthPlace = !validBirthPlaceCodes.has(data.birthCountryRegion)
+      && (data.birthCity || data.birthState);
+    if (needsBirthPlace) {
+      setProgress(90, 'Identificando lugar de nacimiento...');
+      const birthResult = await matchBirthPlaceWithAI(data.birthCity, data.birthState);
+      birthPlaceOk = birthResult.ok;
+      birthPlaceReason = birthResult.reason;
+      if (birthResult.code) data.birthCountryRegion = birthResult.code;
+    }
+
+    // Lugar de nacimiento de la pareja (ddlSpousePOBCountry) — mismo select real
+    // (mismas ~280 opciones, incluye estados de México) que ddlAPP_POB_CNTRY, y
+    // mismo problema: PAREJA_PAIS puede venir con un valor genérico como "Mexico"
+    // sin resolver. Se reutiliza matchBirthPlaceWithAI, pero aquí solo hay ciudad
+    // (el PDF de VisasPro no trae un estado de nacimiento separado para la pareja).
+    let spouseBirthPlaceOk = true, spouseBirthPlaceReason = null;
+    const needsSpouseBirthPlace = !validBirthPlaceCodes.has(data.spouseBirthCountry)
+      && data.spouseBirthCity;
+    if (needsSpouseBirthPlace) {
+      setProgress(92, 'Identificando lugar de nacimiento de la pareja...');
+      const spouseBirthResult = await matchBirthPlaceWithAI(data.spouseBirthCity, null);
+      spouseBirthPlaceOk = spouseBirthResult.ok;
+      spouseBirthPlaceReason = spouseBirthResult.reason;
+      if (spouseBirthResult.code) data.spouseBirthCountry = spouseBirthResult.code;
     }
 
     setProgress(100, '¡Listo!');
     chrome.storage.local.set({ visasproClientData: data });
     showProgress(false);
     renderClientCard(data);
+
     const tCount = Object.keys(toTranslate).length;
-    showAlert(
-      tCount > 0
-        ? `PDF cargado. ${fieldCount} campos, ${tCount} traducidos.`
-        : `PDF cargado. ${fieldCount} campos extraídos.`,
-      'success'
-    );
+    const notices = [];
+    if (tCount > 0 && !translationOk) {
+      notices.push(translationReason === 'no-api-key'
+        ? `no se tradujeron ${tCount} campos (configura tu API key en ⚙️), quedaron en español`
+        : `falló la traducción de ${tCount} campos, quedaron en español`);
+    }
+    if (hasCountries && !countryMatchOk) {
+      notices.push(countryMatchReason === 'no-api-key'
+        ? 'no se identificaron los países visitados con IA (configura tu API key en ⚙️), se usó la tabla básica'
+        : 'falló la identificación de países visitados con IA, se usó la tabla básica');
+    }
+    if (needsBirthPlace && (!birthPlaceOk || !data.birthCountryRegion)) {
+      notices.push(birthPlaceReason === 'no-api-key'
+        ? 'no se identificó el país/estado de nacimiento con IA (configura tu API key en ⚙️), llénalo manualmente'
+        : !birthPlaceOk
+          ? 'falló la identificación del país/estado de nacimiento con IA, llénalo manualmente'
+          : 'la IA no tuvo certeza del país/estado de nacimiento, llénalo manualmente');
+    }
+    if (needsSpouseBirthPlace && (!spouseBirthPlaceOk || !data.spouseBirthCountry)) {
+      notices.push(spouseBirthPlaceReason === 'no-api-key'
+        ? 'no se identificó el país/estado de nacimiento de la pareja con IA (configura tu API key en ⚙️), llénalo manualmente'
+        : !spouseBirthPlaceOk
+          ? 'falló la identificación del país/estado de nacimiento de la pareja con IA, llénalo manualmente'
+          : 'la IA no tuvo certeza del país/estado de nacimiento de la pareja, llénalo manualmente');
+    }
+
+    let msg = `PDF cargado. ${fieldCount} campos`;
+    if (tCount > 0 && translationOk) msg += `, ${tCount} traducidos`;
+    msg += '.';
+    if (notices.length) msg += ' ⚠️ ' + notices.join('; ') + '.';
+    showAlert(msg, notices.length ? 'warning' : 'success');
   } catch (err) {
     console.error('[VisasPro] Error:', err);
     showProgress(false);

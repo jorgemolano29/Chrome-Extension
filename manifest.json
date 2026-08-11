@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VisasPro DS-160 AutoFill",
-  "version": "4.0.0",
+  "version": "1.15.0",
   "description": "Extrae datos del PDF de VisasPro y llena automáticamente el formulario DS-160. Usa Claude API para traducción automática ES→EN.",
   "permissions": [
     "activeTab",
