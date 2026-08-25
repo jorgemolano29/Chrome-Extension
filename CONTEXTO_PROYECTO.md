@@ -971,3 +971,57 @@ cambio grande de arquitectura → 2.0.0).
     datos antes de la cita consular, y que no sustituye la confirmación oficial
     del Departamento de Estado de EE. UU.
 - Versión: 1.14.2 → **1.15.0** (funcionalidad nueva → MINOR).
+
+### v1.15.1 — 2026-08-25 — Bug: extracción con Claude Vision ignoraba media docena de secciones del PDF
+- **Reporte del usuario**: al subir un PDF de "Información para llenado" con
+  datos de trabajo anterior y estudios, esas dos secciones no se llenaban en
+  el formulario CEAC, pese a que el PDF sí las traía completas.
+- **Causa raíz**: el prompt de `extractWithClaudeVision()` en `popup.js`
+  (bloque "Usa exactamente estos nombres de campo...") es una lista blanca de
+  claves que Claude Vision tiene permitido devolver. Esa lista quedó truncada
+  en `WET_PRESENT_ACTIVIDADES` (trabajo actual) — nunca se completó al agregar
+  las secciones posteriores del PDF, aunque `content.js` (fill) y
+  `mappings.js` (`FIELD_RULES`) sí tenían el soporte completo para esos campos
+  desde antes. Como el modelo solo devuelve claves de la lista, todo lo que
+  venía después se perdía en silencio, sin error visible.
+- **Alcance real del bug** (no solo trabajo anterior/estudios, que fue lo que
+  se notó porque en este PDF venían con datos): también faltaban
+  `TRA_DIRECCION_PAGA_VIAJE_*` (domicilio de quien paga el viaje), toda la
+  sección `PUST_*` (viajes previos a EUA / visa previa / robo o extravío /
+  rechazo), `PAS_EXTRAVIO_NUM`/`PAS_EXTRAVIO_EXP` (robo de pasaporte),
+  `CONTUSA_HOTEL`, `FAM_DIRECTA_*` (familiar directo en EUA), toda la sección
+  `PAREJA_*`, y toda la sección `ADD_*` (idiomas, países visitados).
+- **Fix**: se completó la lista blanca del prompt con las ~50 claves
+  faltantes, agrupadas y ordenadas siguiendo el orden de las secciones del
+  PDF. Se verificó por diff contra cada `p('...')`/`r('...')` usado en
+  `buildData()` (popup.js) que ahora no falta ninguna clave real (las únicas
+  claves del prompt sin consumidor downstream, `DIR_PAIS` y
+  `PAS_EMISION_PAIS`, ya estaban así desde antes y no son parte de este bug).
+- Versión: 1.15.0 → **1.15.1** (bug fix → PATCH).
+
+### v1.16.0 — 2026-08-25 — Español por defecto como Idioma 1
+- **Pedido del usuario**: en la sección "Información Adicional" (idiomas), VisasPro
+  siempre reporta español como Idioma 1 en el DS-160. Si el PDF del cliente no
+  trae español en ninguno de los 3 espacios de idiomas, la extensión debe
+  agregarlo por defecto; si el PDF ya lo trae, se debe dejar tal cual vino.
+- **Caso borde resuelto con el usuario**: si el PDF trae otros idiomas pero
+  ninguno es español (ej. Idioma1=Inglés, Idioma2=Francés), se antepone
+  "Spanish" como Idioma 1 y los que ya venían se recorren un lugar
+  (Idioma1→2, Idioma2→3); si ya había 3 idiomas, el que sobra del 3er lugar
+  se descarta. No se pierde ningún idioma que el aplicante sí reportó.
+- **Implementación** (`popup.js`):
+  - `isSpanishLanguage(lang)`: normaliza el string (NFD + strip de acentos,
+    igual que el resto del archivo) y detecta si empieza con "ESPANOL" o
+    "SPANISH" — cubre tanto el valor traducido al inglés (flujo normal, tras
+    `translateFields()`) como el crudo en español (si la traducción falló por
+    falta de API key, o en el flujo de "🔄 Re-procesar con Claude Vision",
+    que no traduce).
+  - `applyDefaultSpanishLanguage(data)`: arma `[language1, language2,
+    language3].filter(Boolean)`; si ninguno pasa `isSpanishLanguage`, antepone
+    `'Spanish'` y recorta a 3 con `.slice(0, 3)`. Si ya hay español en
+    cualquiera de los 3, no hace nada.
+  - Se llama en `processPDF()` justo después del bloque de traducción (para
+    operar siempre sobre el valor final en inglés), y en el handler de
+    `btn-reprocess` justo después de `buildClientData()` (ese flujo no
+    traduce, así que opera sobre el valor crudo del PDF).
+- Versión: 1.15.1 → **1.16.0** (mejora sobre funcionalidad existente → MINOR).

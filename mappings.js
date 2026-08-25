@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════
-//  VISASPRO — MAPPINGS.JS  v1.15.0
+//  VISASPRO — MAPPINGS.JS  v1.16.0
 //  Fuente: Definiciones_Extension_VisasPro_-_AutoFiller.xlsx
 // ════════════════════════════════════════════════════════
 

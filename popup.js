@@ -42,7 +42,7 @@ async function pdfToImages(buffer, dpi = 150, quality = 0.85) {
 }
 
 // ════════════════════════════════════════════════════════
-//  VISASPRO — POPUP.JS  v1.15.0
+//  VISASPRO — POPUP.JS  v1.16.0
 // ════════════════════════════════════════════════════════
 
 // La API key real se lee de chrome.storage.local ('vp_api_key', configurada en ⚙️).
@@ -495,6 +495,34 @@ function buildClientData(f) {
 }
 
 
+// ── Idioma español por defecto ───────────────────────────
+//  Decisión del usuario (2026-08-25): VisasPro siempre reporta español como
+//  Idioma 1 en el DS-160. Si el PDF no lo trae en ninguno de los 3 espacios
+//  de "Especifica al menos 3 idiomas que habla", se antepone "Spanish" y se
+//  recorren los que sí venían un lugar (Idioma1→2, Idioma2→3); el que sobre
+//  del 3er lugar se descarta. Si el PDF ya trae español (en cualquiera de
+//  los 3 campos, traducido o no), se deja tal cual vino, sin tocar nada.
+
+function isSpanishLanguage(lang) {
+  if (!lang) return false;
+  const norm = lang.normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^\x00-\x7F]/g, '')
+    .toUpperCase()
+    .trim();
+  return norm.startsWith('ESPANOL') || norm.startsWith('SPANISH');
+}
+
+function applyDefaultSpanishLanguage(data) {
+  const langs = [data.language1, data.language2, data.language3].filter(Boolean);
+  if (langs.some(isSpanishLanguage)) return;
+  const shifted = ['Spanish', ...langs].slice(0, 3);
+  data.language1 = shifted[0] || '';
+  data.language2 = shifted[1] || '';
+  data.language3 = shifted[2] || '';
+}
+
+
 // ── Mapeo pdfKey → dataKey para campos TRANSLATE ─────────
 
 const TRANSLATE_KEY_MAP = {
@@ -536,6 +564,7 @@ document.getElementById('btn-reprocess').addEventListener('click', async () => {
 
     setProgress(80, 'Aplicando reglas...');
     const data = buildClientData(rawFields);
+    applyDefaultSpanishLanguage(data);
     await chrome.storage.local.set({ visasproClientData: data });
     renderClientCard(data);
     setProgress(100, 'Listo');
@@ -632,6 +661,8 @@ async function processPDF(file) {
         if (dataKey && translated) data[dataKey] = translated;
       }
     }
+
+    applyDefaultSpanishLanguage(data);
 
     // Países visitados: matching contra la lista cerrada de opciones válidas vía IA
     // (data.country1/2/3 ya tienen el valor de la tabla fija EQUIV.countries como
@@ -871,18 +902,35 @@ PI1_CIUDAD_NACIMIENTO_SOLICITANTE, PI1_ESTADO_NACIMIENTO_SOLICITANTE, PI1_PAIS_R
 PI2_CURP, TRA_DIA_VIAJE, TRA_MES_VIAJE, TRA_ANO_VIAJE, TRA_DURACION_NUMERO, TRA_DURACION_UNIDAD,
 TRA_HOSPEDAJE_CALLE, TRA_HOSPEDAJE_CIUDAD, TRA_HOSPEDAJE_ESTADO, TRA_HOSPEDAJE_ZIP,
 TRA_QUIEN_PAGA_VIAJE, TRA_PAGA_VIAJE_NOMBRE, TRA_PAGA_VIAJE_APELLIDO, TRA_PAGA_VIAJE_TELEFONO,
-TRA_PAGA_VIAJE_PARENTESCO, TRA_COM_NOMBRE, TRA_COM_APELLIDO, TRA_COM_PARENTESCO,
+TRA_PAGA_VIAJE_PARENTESCO, TRA_DIRECCION_PAGA_VIAJE_CALLE, TRA_DIRECCION_PAGA_VIAJE_CIUDAD,
+TRA_DIRECCION_PAGA_VIAJE_ESTADO, TRA_DIRECCION_PAGA_VIAJE_ZIP,
+TRA_COM_NOMBRE, TRA_COM_APELLIDO, TRA_COM_PARENTESCO,
+PUST_DIA, PUST_MES, PUST_ANO, PUST_DURACION_NUMERO, PUST_DURACION_UNIDAD,
+PUST_VISA_PREVIA_E_DIA, PUST_VISA_PREVIA_E_MES, PUST_VISA_PREVIA_E_ANO, PUST_VISA_PREVIA_NUMERO,
+PUST_ANO_EXTRAVIO, PUST_EXP_EXTRAVIO, PUST_EXP_RECHAZO,
 DIR_CALLE, DIR_CIUDAD, DIR_ESTADO, DIR_PAIS, DIR_ZIP, DIR_CELULAR, DIR_CORREO, DIR_RRSS, DIR_RRSS_USER,
 PAS_NUMBER, PAS_EMISION_CIUDAD, PAS_EMISION_ESTADO, PAS_EMISION_PAIS,
 PAS_EXP_DIA, PAS_EXP_MES, PAS_EXP_ANO, PAS_VEN_DIA, PAS_VEN_MES, PAS_VEN_ANO,
-CONTUSA_NOMBRE, CONTUSA_APELLIDO, CONTAUSA_PARENTESCO, CONTAUSA_CALLE, CONTAUSA_CIUDAD,
+PAS_EXTRAVIO_NUM, PAS_EXTRAVIO_EXP,
+CONTUSA_NOMBRE, CONTUSA_APELLIDO, CONTUSA_HOTEL, CONTAUSA_PARENTESCO, CONTAUSA_CALLE, CONTAUSA_CIUDAD,
 CONTAUSA_ESTADO, CONTAUSA_ZIP, CONTAUSA_TEL,
 FAM_NOMBRE_PADRE, FAM_APELLIDO_PADRE, FAM_DIA_PADRE, FAM_MES_PADRE, FAM_ANO_PADRE,
 FAM_NOMBRE_MADRE, FAM_APELLIDO_MADRE, FAM_DIA_MADRE, FAM_MES_MADRE, FAM_ANO_MADRE,
-FAM_OTRO_FAMILIAR, WET_PRESENT_OCUPACION, WET_PRESENT_NOBRE_LUGAR,
+FAM_DIRECTA_NOMBRE, FAM_DIRECTA_APELLIDO, FAM_DIRECTA_PARENTESCO, FAM_DIRECTA_ESTATUS,
+FAM_OTRO_FAMILIAR,
+PAREJA_NOMBRE, PAREJA_APELLIDO, PAREJA_NACIONALIDAD, PAREJA_DIA, PAREJA_MES, PAREJA_ANO,
+PAREJA_CIUDAD, PAREJA_PAIS,
+WET_PRESENT_OCUPACION, WET_PRESENT_NOBRE_LUGAR,
 WET_PRESENT_CALLE, WET_PRESENT_CIUDAD, WET_PRESENT_ESTADO, WET_PRESENT_ZIP,
 WET_PRESENT_TEL, WET_PRESENT_INGRESO_DIA, WET_PRESENT_INGRESO_MES, WET_PRESENT_INGRESO_ANO,
-WET_PRESENT_INGRESO_MXN, WET_PRESENT_ACTIVIDADES`
+WET_PRESENT_INGRESO_MXN, WET_PRESENT_ACTIVIDADES,
+WET_PREV_NOMBRE, WET_PREV_CALLE, WET_PREV_CIUDAD, WET_PREV_ESTADO, WET_PREV_ZIP, WET_PREV_PAIS,
+WET_PREV_TEL, WET_PREV_PUESTO, WET_PREV_JEFE_NOMBRE, WET_PREV_JEFE_APELLIDO,
+WET_PREV_ING_DIA, WET_PREV_ING_MES, WET_PREV_ING_ANO,
+WET_PREV_SALIDA_DIA, WET_PREV_SALIDA_MES, WET_PREV_SALIDA_ANO, WET_PREV_ACTIVIDADES,
+EST_NOMBRE_ESCUELA, EST_CALLE, EST_CIUDAD, EST_ESTADO, EST_ZIP, EST_PAIS, EST_CURSO,
+EST_ING_DIA, EST_ING_MES, EST_ING_ANO, EST_SALIDA_DIA, EST_SALIDA_MES, EST_SALIDA_ANO,
+ADD_IDIOMA_1, ADD_IDIOMA_2, ADD_IDIOMA_3, ADD_PAIS_1, ADD_PAIS_2, ADD_PAIS_3`
   });
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
