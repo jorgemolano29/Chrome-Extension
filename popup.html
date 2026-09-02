@@ -5,29 +5,53 @@
   <title>VisasPro DS-160</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
     body {
       width: 100%;
       min-width: 320px;
       max-width: 420px;
+      min-height: 100vh;
       margin: 0 auto;
       font-family: 'Segoe UI', system-ui, sans-serif;
       background: #f8f9fa;
       color: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+    }
+    .icon {
+      width: 1em; height: 1em;
+      vertical-align: -0.15em;
+      fill: none; stroke: currentColor;
+      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+      flex-shrink: 0;
     }
     .header {
       background: linear-gradient(135deg, #1a1a2e, #16213e);
       padding: 11px 16px;
       display: flex; align-items: center; gap: 10px;
-    }
-    .logo {
-      width: 30px; height: 30px; background: #e63946;
-      border-radius: 6px; display: flex; align-items: center;
-      justify-content: center; font-weight: 800; color: white; font-size: 12px;
       flex-shrink: 0;
     }
     .header h1 { color: white; font-size: 13px; font-weight: 700; }
     .header p  { color: #8892b0; font-size: 10px; }
-    .body { padding: 12px; }
+    .body { padding: 12px; flex: 1; display: flex; flex-direction: column; }
+    #home-view {
+      flex: 1;
+      display: flex; flex-direction: column; justify-content: flex-start;
+      gap: 24px;
+    }
+    .home-btn {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 10px; width: 100%; min-height: 140px; padding: 20px 12px;
+      background: #f7f8ff; border: 1px solid #e2e8f0; border-radius: 12px;
+      font-family: inherit; font-size: 15px; font-weight: 700; color: #2d3748;
+      text-align: center; cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .home-btn .icon { width: 36px; height: 36px; }
+    .home-btn:not(:disabled):hover { background: #e63946; color: white; border-color: #e63946; }
+    .home-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .home-btn-primary { background: #1a1a2e; color: white; border-color: #1a1a2e; }
+    .home-btn-sub { font-size: 11px; font-weight: 400; opacity: 0.75; }
     .step-label {
       font-size: 10px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.6px; color: #718096; margin-bottom: 7px;
@@ -57,7 +81,7 @@
       border-radius: 3px; width: 0%; transition: width 0.3s;
     }
     .alert {
-      margin-top: 8px; padding: 8px 10px;
+      margin-top: 8px; margin-bottom: 12px; padding: 8px 10px;
       border-radius: 6px; font-size: 10px; line-height: 1.4; display: none;
     }
     .alert.success { background: #e6f7ee; color: #276749; border-left: 3px solid #38a169; }
@@ -78,19 +102,25 @@
       flex-shrink: 0;
     }
     .client-name { color: white; font-size: 12px; font-weight: 700; }
-    .client-sub  { color: rgba(255,255,255,0.75); font-size: 10px; }
-    .data-grid {
-      padding: 8px 12px;
-      display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+    .action-row { display: flex; gap: 6px; padding: 10px 12px; }
+    /* Variante sin relleno horizontal — para cuando el contenedor padre ya
+       trae su propio padding (ej. vistas de nivel superior como #settings-view,
+       a diferencia de .client-card que no tiene padding propio). */
+    .action-row.flush { padding: 8px 0; }
+    .action-btn {
+      flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 6px; min-height: 62px; padding: 8px 4px;
+      background: #f7f8ff; border: 1px solid #e2e8f0; border-radius: 10px;
+      font-family: inherit; font-size: 9px; font-weight: 700; color: #2d3748;
+      text-align: center; cursor: pointer; line-height: 1.25;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
     }
-    .data-item .lbl {
-      font-size: 8px; text-transform: uppercase;
-      letter-spacing: 0.4px; color: #a0aec0;
-    }
-    .data-item .val {
-      font-size: 10px; font-weight: 600; color: #1a1a2e;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    }
+    .action-btn .icon { width: 20px; height: 20px; }
+    .action-btn:hover { background: #e63946; color: white; border-color: #e63946; }
+    .action-btn-primary { background: #1a1a2e; color: white; border-color: #1a1a2e; }
+    .action-btn-danger  { background: #fff5f5; color: #e63946; border-color: #fed7d7; }
+    .action-btn.full { width: 100%; min-height: 56px; font-size: 11px; margin-top: 4px; }
+    .action-btn.full .icon { width: 22px; height: 22px; }
     .divider { height: 1px; background: #f0f0f0; margin: 0 12px; }
     .sections { padding: 8px 12px; }
     .sections-label {
@@ -120,66 +150,153 @@
       font-size: 10px; color: #718096; cursor: pointer;
     }
     .btn-clear:hover { background: #edf2f7; }
-    .footer { text-align: center; padding: 6px; font-size: 9px; color: #a0aec0; }
+    .clickup-select {
+      width: 100%; padding: 7px 8px; margin-bottom: 6px;
+      border: 1px solid #cbd5e0; border-radius: 5px;
+      font-size: 10px; color: #1a1a2e; background: white;
+      font-family: inherit;
+    }
+    .footer { text-align: center; padding: 6px; font-size: 9px; color: #a0aec0; flex-shrink: 0; }
   </style>
 </head>
 <body>
 
-  <div class="header">
-    <div class="logo">VP</div>
-    <div style="flex:1">
-      <h1>VisasPro DS-160</h1>
-      <p>Cargador de datos del cliente</p>
-    </div>
-    <button id="btn-settings" title="Configuración" style="background:none;border:none;color:white;font-size:16px;cursor:pointer;padding:4px;">⚙️</button>
-  </div>
+  <!-- Sprite de íconos SVG reutilizables (referenciados via <use href="#icon-...">) -->
+  <svg style="display:none" aria-hidden="true">
+    <symbol id="icon-settings" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+    </symbol>
+    <symbol id="icon-arrow-left" viewBox="0 0 24 24">
+      <line x1="19" y1="12" x2="5" y2="12"></line>
+      <polyline points="12 19 5 12 12 5"></polyline>
+    </symbol>
+    <symbol id="icon-folder" viewBox="0 0 24 24">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+    </symbol>
+    <symbol id="icon-edit" viewBox="0 0 24 24">
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"></path>
+    </symbol>
+    <symbol id="icon-calendar" viewBox="0 0 24 24">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+      <line x1="16" y1="2" x2="16" y2="6"></line>
+      <line x1="8" y1="2" x2="8" y2="6"></line>
+      <line x1="3" y1="10" x2="21" y2="10"></line>
+    </symbol>
+    <symbol id="icon-file-text" viewBox="0 0 24 24">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+      <polyline points="14 2 14 8 20 8"></polyline>
+      <line x1="16" y1="13" x2="8" y2="13"></line>
+      <line x1="16" y1="17" x2="8" y2="17"></line>
+    </symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24">
+      <polyline points="23 4 23 10 17 10"></polyline>
+      <polyline points="1 20 1 14 7 14"></polyline>
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+    </symbol>
+    <symbol id="icon-cloud-upload" viewBox="0 0 24 24">
+      <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path>
+      <polyline points="16 16 12 12 8 16"></polyline>
+      <line x1="12" y1="12" x2="12" y2="21"></line>
+    </symbol>
+    <symbol id="icon-trash" viewBox="0 0 24 24">
+      <polyline points="3 6 5 6 21 6"></polyline>
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+      <line x1="10" y1="11" x2="10" y2="17"></line>
+      <line x1="14" y1="11" x2="14" y2="17"></line>
+    </symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24">
+      <polyline points="20 6 9 17 4 12"></polyline>
+    </symbol>
+  </svg>
 
-  <!-- Panel de configuración -->
-  <div id="settings-panel" style="display:none;padding:12px;background:white;border-bottom:1px solid #e2e8f0;">
-    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:#718096;margin-bottom:6px;">API Key de Claude (Anthropic)</div>
-    <input type="password" id="api-key-input" placeholder="sk-ant-api03-..." style="width:100%;padding:6px 8px;border:1px solid #cbd5e0;border-radius:5px;font-size:11px;box-sizing:border-box;margin-bottom:6px;"/>
-    <div style="display:flex;gap:6px;">
-      <button id="btn-save-key" style="flex:1;padding:5px;background:#e63946;color:white;border:none;border-radius:5px;font-size:10px;cursor:pointer;">Guardar</button>
-      <button id="btn-clear-key" style="flex:1;padding:5px;background:#f7f8ff;border:1px solid #e2e8f0;border-radius:5px;font-size:10px;cursor:pointer;">Borrar</button>
+  <div class="header">
+    <button id="btn-back" title="Volver" style="display:none;background:none;border:none;color:white;font-size:16px;cursor:pointer;padding:4px;"><svg class="icon"><use href="#icon-arrow-left"></use></svg></button>
+    <div style="flex:1">
+      <h1>VisasPro</h1>
+      <p id="header-sub">Cargador de datos del cliente</p>
     </div>
-    <div id="key-status" style="font-size:9px;color:#718096;margin-top:4px;"></div>
+    <button id="btn-settings" title="Configuración" style="background:none;border:none;color:white;font-size:16px;cursor:pointer;padding:4px;"><svg class="icon"><use href="#icon-settings"></use></svg></button>
   </div>
 
   <div class="body">
 
-    <div id="step1">
-      <div class="step-label">Paso 1 — Cargar PDF del cliente</div>
-      <div class="upload-wrapper">
-        <input type="file" id="pdf-input" accept=".pdf" />
-        <span class="upload-icon">📂</span>
-        <span class="upload-text">
-          <strong>Seleccionar PDF</strong>
-          Formulario VisasPro del cliente
-        </span>
+    <div class="alert" id="alert"></div>
+
+    <div id="settings-view" style="display:none;">
+      <div class="step-label">API Key de Claude (Anthropic)</div>
+      <input type="password" id="api-key-input" placeholder="sk-ant-api03-..." style="width:100%;padding:6px 8px;border:1px solid #cbd5e0;border-radius:5px;font-size:11px;box-sizing:border-box;margin-bottom:8px;"/>
+      <div class="action-row flush">
+        <button class="action-btn action-btn-primary" id="btn-save-key" title="Guardar API Key de Claude"><svg class="icon"><use href="#icon-check"></use></svg>Guardar</button>
+        <button class="action-btn" id="btn-clear-key" title="Borrar API Key de Claude"><svg class="icon"><use href="#icon-trash"></use></svg>Borrar</button>
       </div>
-      <div class="progress-wrap" id="progress-wrap">
-        <div class="progress-text">
-          <span id="progress-msg">Procesando...</span>
-          <span id="progress-pct">0%</span>
-        </div>
-        <div class="progress-bar">
-          <div class="progress-fill" id="progress-fill"></div>
-        </div>
+      <div id="key-status" style="font-size:9px;color:#718096;margin:4px 12px 0;"></div>
+
+      <div class="divider" style="margin: 16px 12px;"></div>
+
+      <div class="step-label">API Token de ClickUp</div>
+      <input type="password" id="clickup-token-input" placeholder="pk_..." style="width:100%;padding:6px 8px;border:1px solid #cbd5e0;border-radius:5px;font-size:11px;box-sizing:border-box;margin-bottom:8px;"/>
+      <div class="action-row flush">
+        <button class="action-btn action-btn-primary" id="btn-save-clickup-token" title="Guardar Token de ClickUp"><svg class="icon"><use href="#icon-check"></use></svg>Guardar</button>
+        <button class="action-btn" id="btn-clear-clickup-token" title="Borrar Token de ClickUp"><svg class="icon"><use href="#icon-trash"></use></svg>Borrar</button>
       </div>
+      <div id="clickup-token-status" style="font-size:9px;color:#718096;margin:4px 12px 0;"></div>
     </div>
 
-    <div class="alert" id="alert"></div>
+    <div id="home-view">
+      <button id="btn-home-ds160" class="home-btn home-btn-primary">
+        <svg class="icon"><use href="#icon-edit"></use></svg>
+        <span>Llenar formulario DS-160</span>
+      </button>
+      <button id="btn-home-citas" class="home-btn">
+        <svg class="icon"><use href="#icon-calendar"></use></svg>
+        <span>Llenar Sistema de Citas</span>
+      </button>
+    </div>
+
+    <div id="citas-view" style="display:none;">
+      <div class="step-label">Información de Cliente</div>
+      <select id="citas-tramite-select" class="clickup-select">
+        <option value="">Cargando trámites...</option>
+      </select>
+      <button class="action-btn action-btn-primary full" id="btn-citas-fill" title="Llenar formulario">
+        <svg class="icon"><use href="#icon-edit"></use></svg>Llenar formulario
+      </button>
+    </div>
+
+    <div id="ds160-view" style="display:none;">
+
+      <div id="step1">
+        <div class="step-label">Paso 1 — Cargar PDF del cliente</div>
+        <div class="upload-wrapper">
+          <input type="file" id="pdf-input" accept=".pdf" />
+          <span class="upload-icon"><svg class="icon" style="width:22px;height:22px;"><use href="#icon-folder"></use></svg></span>
+          <span class="upload-text">
+            <strong>Seleccionar PDF</strong>
+            Formulario VisasPro del cliente
+          </span>
+        </div>
+        <div class="progress-wrap" id="progress-wrap">
+          <div class="progress-text">
+            <span id="progress-msg">Procesando...</span>
+            <span id="progress-pct">0%</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+        </div>
+        <button class="btn-section full" id="btn-review-step1" style="background:#1a1a2e;color:white;border-color:#1a1a2e;margin-top:8px;padding:8px 4px;"><svg class="icon"><use href="#icon-file-text"></use></svg> Generar PDF de Revisión</button>
+      </div>
 
     <div class="client-card" id="client-card">
       <div class="client-card-header">
         <div class="avatar" id="avatar">?</div>
         <div>
           <div class="client-name" id="client-name">—</div>
-          <div class="client-sub"  id="client-sub">—</div>
         </div>
       </div>
 
-      <div class="data-grid" id="data-grid"></div>
       <div class="divider"></div>
 
       <div class="sections">
@@ -199,25 +316,37 @@
           <button class="btn-section" id="btn-workprev">Trabajo anterior</button>
           <button class="btn-section" id="btn-additional">Adicional</button>
           <button class="btn-section" id="btn-security">Seguridad</button>
-          <button class="btn-section full" id="btn-review" style="background:#1a1a2e;color:white;border-color:#1a1a2e;margin-top:4px;">📄 Generar PDF de Revisión</button>
         </div>
-
 
       </div>
 
-      <div class="divider"></div>
-      <button class="btn-clear" id="btn-reprocess" style="background:#fff5f5;color:#e63946;border:1px solid #fed7d7;margin-bottom:0;">🔄 Re-procesar con Claude Vision</button>
-      <button class="btn-clear" id="btn-clear">Limpiar y cargar otro cliente</button>
+      <div class="action-row">
+        <button class="action-btn action-btn-primary" id="btn-review" title="Generar PDF de Revisión"><svg class="icon"><use href="#icon-file-text"></use></svg>PDF Revisión</button>
+        <button class="action-btn action-btn-danger" id="btn-reprocess" title="Re-procesar con Claude Vision"><svg class="icon"><use href="#icon-refresh"></use></svg>Reprocesar</button>
+        <button class="action-btn" id="btn-clear" title="Limpiar y cargar otro cliente"><svg class="icon"><use href="#icon-trash"></use></svg>Limpiar</button>
+      </div>
+
+      <div class="divider" style="margin: 16px 12px;"></div>
+
+      <div class="sections">
+        <div class="sections-label">Cargar información a ClickUp</div>
+        <select id="clickup-tramite-select" class="clickup-select">
+          <option value="">Cargando trámites...</option>
+        </select>
+        <button class="action-btn action-btn-primary full" id="btn-clickup-send" title="Guardar en ClickUp"><svg class="icon"><use href="#icon-cloud-upload"></use></svg>Guardar en ClickUp</button>
+      </div>
     </div>
+
+    </div><!-- /ds160-view -->
 
   </div>
 
-  <div class="footer">VisasPro © 2026 · v1.16.0</div>
+  <div class="footer">VisasPro © 2026 · v1.23.0</div>
 
   <!-- Diálogo de confirmación Claude Vision -->
   <div id="vision-dialog" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:999;align-items:center;justify-content:center;">
     <div style="background:white;border-radius:10px;padding:20px;margin:16px;max-width:320px;">
-      <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:8px;">📄 PDF aplanado detectado</div>
+      <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:8px;"><svg class="icon"><use href="#icon-file-text"></use></svg> PDF aplanado detectado</div>
       <div style="font-size:11px;color:#4a5568;line-height:1.5;margin-bottom:12px;">
         Este PDF no contiene datos de formulario estándar.<br><br>
         Claude Vision puede extraer los datos automáticamente.<br><br>

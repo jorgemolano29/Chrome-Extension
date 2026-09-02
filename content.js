@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════
-//  VISASPRO — CONTENT.JS  v1.16.0
+//  VISASPRO — CONTENT.JS  v1.23.0
 // ════════════════════════════════════════════════════════
 
 // ── Helpers ──────────────────────────────────────────────
@@ -980,14 +980,27 @@ const SECTION_HANDLERS = {
 // ── Listener ─────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Lectura puntual del ID de solicitud DS-160 (visible en el master page de
+  // CEAC una vez creada la solicitud) — usado por el botón "Guardar en
+  // ClickUp" del popup para llevarse el Número DS-160 si en ese momento la
+  // pestaña activa es una página de CEAC con la solicitud ya creada.
+  if (message.action === 'getAppId') {
+    const appId = document.getElementById('ctl00_lblAppID')?.textContent?.trim() || null;
+    sendResponse({ ok: true, appId });
+    return;
+  }
+
   if (message.action !== 'fill') return;
   chrome.storage.local.get('visasproClientData', async result => {
     const data = result.visasproClientData;
-    if (!data) { sendResponse({ ok: false, error: 'No hay datos de cliente.' }); return; }
+    // "review" no llena campos del formulario con `data` (solo lo usa para el nombre
+    // del PDF exportado), así que puede generarse aunque aún no se haya cargado/
+    // extraído ningún PDF de cliente — ver botón en Paso 1.
+    if (!data && message.section !== 'review') { sendResponse({ ok: false, error: 'No hay datos de cliente.' }); return; }
     const handler = SECTION_HANDLERS[message.section];
     if (!handler) { sendResponse({ ok: false, error: `Sección desconocida: ${message.section}` }); return; }
     try {
-      const result = await handler(data);
+      const result = await handler(data || {});
       // Un handler puede devolver solo el conteo (número, formato clásico) o
       // { count, notices } cuando además quiere avisar algo en pantalla (ej. valores
       // por defecto usados) — ver fillTravel.

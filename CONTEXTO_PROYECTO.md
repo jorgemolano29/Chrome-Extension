@@ -1025,3 +1025,538 @@ cambio grande de arquitectura → 2.0.0).
     `btn-reprocess` justo después de `buildClientData()` (ese flujo no
     traduce, así que opera sobre el valor crudo del PDF).
 - Versión: 1.15.1 → **1.16.0** (mejora sobre funcionalidad existente → MINOR).
+
+### v1.17.0 — 2026-09-01 — Pantalla inicial con 2 flujos + PDF de Revisión accesible sin extraer datos
+- **Pedido del usuario**: al abrir la extensión, mostrar primero una pantalla con 2
+  botones: "Llenar formulario DS-160" (el flujo completo ya existente) y "Llenar
+  Sistema de Citas" (aún sin funcionalidad — botón deshabilitado, "próximamente";
+  pendiente de que el usuario describa qué debe hacer). Además, mover/duplicar el
+  botón "📄 Generar PDF de Revisión" al Paso 1 (pantalla de carga de PDF), porque a
+  veces solo se necesita exportar el PDF de revisión sin cargar/extraer el PDF del
+  cliente (y la extracción a veces falla).
+- **Implementación**:
+  - `popup.html`: nuevo `#home-view` (los 2 botones) y `#ds160-view` (envuelve todo
+    el flujo existente: Paso 1, alert, client-card). Botón `#btn-home-citas` con
+    atributo `disabled` y sin listener — no hace nada, como pidió el usuario.
+    Flecha `#btn-back` agregada al header (oculta en home, visible dentro de
+    cualquier flujo). Botón `#btn-review-step1` agregado al Paso 1, mismo estilo
+    que el `#btn-review` ya existente dentro de la client-card.
+  - `popup.js`: función `showView(view)` alterna `#home-view` / `#ds160-view` y la
+    flecha de volver. `#btn-home-ds160` → `showView('ds160')`; `#btn-back` →
+    `showView('home')`. `#btn-review-step1` llama al mismo `fillSection('review')`
+    que ya usaba el botón original. El check de storage al cargar el popup (que
+    auto-renderiza la client-card si ya hay un cliente en memoria) ahora también
+    hace `showView('ds160')` antes de renderizar, para no dejar esa pantalla
+    detrás del home.
+  - `content.js`: el listener de `chrome.runtime.onMessage` exigía que existiera
+    `visasproClientData` en storage para *cualquier* sección, incluyendo `review`
+    — pero `generateReviewPDF()` solo usa `data.firstName`/`data.lastName` para el
+    nombre del PDF (todo el contenido lo obtiene en vivo de las páginas de
+    revisión de CEAC vía `fetch`). Se agregó una excepción: si la sección es
+    `review` y no hay datos, se ejecuta igual con `data = {}` (el nombre del PDF
+    cae al fallback ya existente `'Cliente'`). Decisión confirmada con el usuario:
+    generarlo igual con nombre genérico en vez de exigir un cliente cargado.
+- Versión: 1.16.0 → **1.17.0** (mejora sobre funcionalidad existente → MINOR).
+
+### v1.18.0 — 2026-09-01 — Íconos SVG + rediseño de la pantalla de inicio
+- **Pedido del usuario**: reemplazar todos los íconos emoji por SVG, y en la
+  pantalla de inicio (los 2 botones agregados en v1.17.0) hacer los botones más
+  grandes, del mismo tamaño entre sí, y centrados verticalmente (antes quedaban
+  arriba con mucho espacio vacío abajo, porque la extensión corre como side panel
+  — que ocupa el alto completo del navegador — y el contenido no llenaba ese alto).
+- **Alcance**: se convirtieron los íconos estáticos del HTML (header, carga de
+  PDF, botones de sección, diálogo de Claude Vision). Se dejaron tal cual los
+  emoji que aparecen dentro de mensajes de texto dinámicos en `popup.js`
+  (ej. "⚠️" en notices, "✅"/"❌" en el status de la API key) — son parte de una
+  oración, no íconos de UI independientes.
+- **Implementación** (`popup.html`):
+  - Sprite `<svg style="display:none">` con `<symbol>` reutilizables
+    (`icon-settings`, `icon-arrow-left`, `icon-folder`, `icon-edit`,
+    `icon-calendar`, `icon-file-text`, `icon-refresh`, estilo outline/stroke a
+    24x24), referenciados con `<svg class="icon"><use href="#icon-...">` donde
+    antes iba el emoji. Clase `.icon` con `width/height:1em` para que el ícono
+    escale con el tamaño de fuente del botón que lo contiene (excepto donde se
+    fija un tamaño explícito, como el ícono de carga de PDF).
+  - `body` pasó a `display:flex; flex-direction:column; min-height:100vh` (antes
+    sin altura definida) para que `.body` (`flex:1`) reparta el alto disponible
+    del side panel entre `#home-view`/`#ds160-view`, y el `.footer` quede fijo
+    abajo.
+  - Botones de inicio: nueva clase `.home-btn` (antes reutilizaban `.btn-section`)
+    con `min-height:108px`, ícono + label en columna, y `#home-view` con
+    `flex:1; justify-content:center` para centrarlos verticalmente en el alto
+    disponible. Se unificó el markup de ambos botones (ícono + label +
+    subtítulo opcional) para que midan lo mismo aunque uno tenga una línea
+    "Próximamente" y el otro no.
+  - `popup.js`: se agregó `showView('home')` explícito cuando no hay cliente en
+    storage al abrir el popup (antes el texto del header quedaba con el string
+    por defecto del HTML, desincronizado del texto que pone `showView()`).
+- Versión: 1.17.0 → **1.18.0** (mejora sobre funcionalidad existente → MINOR).
+
+### v1.18.1 — 2026-09-01 — v1.18.0 no fue suficiente: centrado vertical de home no funcionaba
+- El usuario probó v1.18.0 (captura de pantalla) y los 2 botones de inicio seguían
+  pegados entre sí, angostos, y pegados arriba con espacio vacío abajo — el
+  `justify-content:center` de `#home-view` sobre `body { min-height:100vh }` no
+  estaba repartiendo el espacio como se esperaba.
+- **Causa probable**: `min-height: 100vh` en `body` fija un *mínimo*, no un alto
+  real — en el contenedor donde el usuario probó (side panel/ventana de
+  inspección de `popup.html`), el cálculo del alto disponible para el `flex:1`
+  de `#home-view` no se estaba resolviendo de forma confiable contra ese mínimo.
+- **Fix**: `body` pasa de `min-height:100vh` a `height:100vh` (con `height:100dvh`
+  como mejora progresiva para contenedores embebidos) + `overflow:hidden`, y
+  `.body` (el div) ahora es el que hace scroll internamente
+  (`overflow-y:auto; min-height:0` — el `min-height:0` es necesario para que un
+  hijo flex con `flex:1` pueda encogerse y activar el scroll en vez de desbordar
+  el contenedor). Esto fuerza a que el alto de `body` sea siempre exactamente el
+  del viewport real, para que el centrado vertical de `#home-view` sea confiable.
+- Además, ajustes visuales pedidos: gap entre los 2 botones 14px → 28px (ya no
+  se ven pegados), `#home-view` con `margin: 0 -4px` para que los botones sean
+  un poco más anchos, y los botones mismos más grandes (`min-height` 108px →
+  140px, ícono 30px → 36px, `font-size` 14px → 15px).
+- Versión: 1.18.0 → **1.18.1** (arreglo de un comportamiento que no quedó bien
+  en la primera pasada → PATCH).
+
+### v1.18.2 — 2026-09-01 — v1.18.1 tampoco fue suficiente: botones seguían angostos
+- El usuario mandó 2 capturas más: los botones de inicio seguían tan angostos
+  como antes (mucho aire a los lados) y tan arriba como antes — el cambio de
+  v1.18.1 no tuvo ningún efecto visible. Pidió explícitamente que el ancho
+  quedara igual al de los elementos del Paso 1 (`.upload-wrapper`,
+  `#btn-review-step1`), que sí se ven correctos (ocupan todo el ancho
+  disponible dentro del padding de `.body`).
+- **Causa real**: `.home-btn` dependía de `align-items: stretch` (el valor por
+  defecto de un contenedor flex) para estirarse al ancho de `#home-view` — a
+  diferencia de `.upload-wrapper`, que es un `<div>` de bloque normal (ancho
+  100% automático, sin depender de flex). Ese stretch de los botones no se
+  estaba aplicando de forma confiable en el contexto real donde corre la
+  extensión (side panel de Chrome) — mismo problema de fondo con el vertical
+  centering, que tampoco se resolvió con `height:100vh`/`100dvh` +
+  `overflow:hidden` del intento anterior (que además se revirtió por el riesgo
+  de recortar contenido del `ds160-view` si el cálculo de alto fallaba).
+- **Fix**: se revirtió `body` a `min-height:100vh` (sin `height`/`dvh`/
+  `overflow:hidden`, evita el riesgo de recorte). `.home-btn` ahora tiene
+  `width: 100%` explícito — ya no depende de que el stretch de flex funcione,
+  se fuerza directo, igual que el ancho automático de `.upload-wrapper`. Para
+  que no queden pegados al header, `#home-view` suma `padding-top: 40px` fijo
+  (en vez de depender solo de `justify-content:center` sobre un alto que no
+  se estaba resolviendo bien) — se mantiene el `justify-content:center` como
+  beneficio extra si el side panel real sí tiene alto de sobra, pero ya no es
+  el único mecanismo del que depende verse bien.
+- Versión: 1.18.1 → **1.18.2** (arreglo de un comportamiento que no quedó bien
+  en la segunda pasada tampoco → PATCH).
+
+### v1.18.3 — 2026-09-01 — Más separación entre los 2 botones de inicio
+- El usuario confirmó que el ancho ya quedó bien (v1.18.2), pero pidió más
+  separación entre los 2 botones — se veían "juntitos" con el `gap` de 28px.
+- **Fix**: `gap` de `#home-view` 28px → 48px.
+- Versión: 1.18.2 → **1.18.3** (ajuste visual sobre funcionalidad existente →
+  MINOR/PATCH menor, se deja como PATCH por ser un ajuste puntual sin cambio
+  de comportamiento).
+
+### v1.18.4 — 2026-09-01 — Causa raíz real encontrada: `showView()` pisaba el `display:flex` con un inline style
+- El usuario mandó otra captura: seguían pegados pese a subir el `gap` a 48px.
+  Pidió explícitamente no seguir iterando a ciegas ("quiero que lo hagas bien
+  a la primera"), así que esta vez se verificó con evidencia en vez de
+  adivinar: se abrió `popup.html` en Chrome headless (`--headless=new
+  --screenshot`) y se midieron los píxeles de la captura con PIL (escaneo de
+  columna/fila de color) para ubicar los bordes reales de los 2 botones.
+- **Causa raíz confirmada**: `popup.js` → `showView()` hace
+  `home-view.style.display = 'block'` cuando la vista es `'home'`. Ese
+  **inline style** tiene más especificidad que la regla de la hoja de
+  estilos `#home-view { display: flex; ... }`, así que la pisaba por
+  completo cada vez que se mostraba la pantalla de inicio (que es siempre al
+  abrir la extensión sin cliente cargado). Con `display:block` en vez de
+  `flex`, **todas** las propiedades flex (`gap`, `justify-content: center`,
+  `flex: 1`) eran no-ops silenciosos — por eso ningún intento de las v1.18.1
+  a v1.18.3 tuvo efecto visible, mientras que `width`, `padding` y
+  `min-height` (que no dependen de flex) sí se veían bien y hacían parecer
+  que "algo" funcionaba.
+- **Fix** (1 línea): `popup.js` línea 545 — `'block'` → `'flex'`.
+- **Verificación**: se generaron 2 capturas con Chrome headless (una dejando
+  correr el HTML/CSS tal cual sin JS, otra ejecutando una copia exacta de
+  `showView('home')` ya corregida) — ambas muestran los 2 botones separados
+  por el gap completo y centrados verticalmente en el alto disponible, antes
+  de reportar el fix como listo.
+- Versión: 1.18.3 → **1.18.4** (arreglo de bug real, con causa raíz
+  identificada y verificada → PATCH).
+
+### v1.18.5 — 2026-09-01 — Botones de inicio arriba (ya no centrados verticalmente)
+- Con el bug de v1.18.4 resuelto, el usuario vio el centrado vertical
+  funcionando por primera vez y pidió lo contrario: que los botones queden
+  arriba, no centrados en el alto disponible.
+- **Fix**: `#home-view` — `justify-content: center` → `flex-start`, se quita
+  el `padding-top: 40px` (ya no hace falta; el único margen superior es el
+  `padding: 12px` normal de `.body`, igual que el resto de las pantallas).
+  Se mantiene `flex: 1` y el `gap: 48px` entre los 2 botones.
+- Verificado con la misma captura headless antes de reportarlo.
+- Versión: 1.18.4 → **1.18.5** (ajuste de posicionamiento → PATCH).
+
+### v1.18.6 — 2026-09-01 — Gap de los botones de inicio a 24px
+- Fix: `#home-view` `gap` 48px → 24px.
+- Versión: 1.18.5 → **1.18.6** (ajuste visual → PATCH).
+
+### v1.19.0 — 2026-09-01 — Envío de datos del cliente a ClickUp (Sistema de Citas)
+- **Pedido del usuario**: los 17 datos que pide el Sistema de Citas de la visa
+  ya vienen en el PDF de VisasPro; en vez de capturarlos dos veces, al extraer
+  el PDF la extensión debe permitir elegir el trámite (tarea) correspondiente
+  en ClickUp — de una lista filtrada a trámites en progreso y tipo ≠ Adelanto
+  — y mandarle ahí los datos que sí puede sacar del PDF, para retomarlos
+  después al construir el botón de "Llenar Sistema de Citas".
+- **Descubrimiento del esquema real de ClickUp** (con Personal API Token del
+  usuario, vía `curl`): Space "VisasPro" → lista "Trámites"
+  (`901404424657`). Status nativo `en progreso` = su "InProgress". Campo
+  `Trámite` (drop_down, id `975d92aa-...`) = tipo de trámite; su valor en las
+  tareas es el **orderindex** de la opción (entero), no el id — "⚡️ Adelanto"
+  es orderindex `2` al momento de escribir esto (si se reordenan las opciones
+  del drop_down en ClickUp, hay que actualizar `CLICKUP_ADELANTO_ORDERINDEX`
+  en `popup.js`). Se detectaron 2 campos que parecían servir pero no aplican:
+  `Visa - DS-160 Apellido` (solo 5 letras) + `Visa - DS-160 Año Nac.` (solo
+  año) son el trío que usa la página de "Check My Case Status" de CEAC
+  (apellido-5-letras + año + Application ID), no el apellido/fecha de
+  nacimiento completos.
+- **Reglas de negocio confirmadas con el usuario** (así que varios de los 17
+  campos originales NO se guardan en ClickUp):
+  - País de Nacimiento y País de Residencia: siempre México → no se guardan.
+  - Consulado: no se crea campo nuevo, se reutiliza el ya existente
+    `Ubicación del CAS` (de lectura, no de escritura, en este paso).
+  - Tipo de Visa / Clase de Visa Anterior: siempre B1/B2 → constante fija en
+    el código de la extensión (aún no escrita en ningún lado — se usará
+    cuando se construya el botón de Citas), no se guarda en ClickUp.
+  - Número DS-160: NO se manda en este paso — ya existe el campo
+    `Visa - DS-160 ID` en ClickUp, pero ese dato se captura *después*, al
+    llenar el DS-160 en CEAC (de donde ya leemos `ctl00_lblAppID` para el PDF
+    de Revisión) — pendiente de implementar ese segundo punto de sincronía.
+  - Visa previa (sí/no): derivado — "sí" si el PDF trae cualquier dato de
+    fecha de emisión de visa previa (`visaIssue_day/month/year`), sin
+    necesidad de mirar el número de visa.
+- **Custom Fields nuevos creados en la lista real "Trámites" vía API**
+  (prefijo `Visa - `, confirmado por el usuario): Nombre(s), Apellido(s),
+  Número de Pasaporte, Estado de Residencia (todos `short_text`); Visa Previa
+  (`drop_down` Sí/No); Fecha de Emisión Visa Anterior y Fecha de Vencimiento
+  Visa Anterior (`date`). Se reutilizan los ya existentes: `Teléfono`,
+  `Visa - Correo electrónico`, `Visa - Fecha de Nacimiento`.
+- **Campo de PDF que estaba huérfano, ahora conectado**: `mappings.js` ya
+  traía `PUST_VISA_PREVIA_V_MES` (mes de vencimiento de la visa previa) con
+  su equivalencia, pero `buildClientData()` en `popup.js` nunca lo leía. Se
+  agregó `visaExpiry_day/month/year` leyendo `PUST_VISA_PREVIA_V_DIA` /
+  `_V_MES` / `_V_ANO` — el día y año son una suposición por convención de
+  nombres con el bloque hermano de emisión (`_E_DIA`/`_E_ANO`), **sin
+  verificar contra un PDF real todavía**.
+- **Implementación**:
+  - `manifest.json`: se agregó `https://api.clickup.com/*` a
+    `host_permissions`.
+  - `popup.html`: input de token de ClickUp en el panel de ⚙️ (mismo patrón
+    que la API key de Claude, storage key `vp_clickup_token`); nueva sección
+    "Sistema de Citas — ClickUp" dentro de la client-card con un `<select>`
+    de trámites y el botón "☁️ Guardar en ClickUp"; ícono SVG nuevo
+    `icon-cloud-upload` en el sprite.
+  - `popup.js`: `loadTramites()` llena el `<select>` al renderizar la
+    client-card, consultando `GET /list/{id}/task?statuses[]=en progreso` y
+    filtrando client-side por el orderindex de "Trámite"; el botón de envío
+    arma los valores (fechas convertidas a epoch-ms UTC vía `toClickUpDate()`,
+    que traduce el código de 3 letras JAN..DEC que ya usa el resto del
+    pipeline) y hace un `POST /task/{id}/field/{fieldId}` por cada campo con
+    valor (la API de ClickUp v2 no tiene un endpoint de bulk-update).
+- **Verificado antes de reportarlo**: se corrió el filtro real contra la
+  lista "Trámites" del usuario (11 tareas en "en progreso", 7 excluidas por
+  ser Adelanto, quedan 4) — coincide con lo esperado. **No** se probó el
+  `POST` de escritura contra una tarea real (para no meter datos sintéticos
+  en el trámite real de un cliente) — pendiente que el usuario lo pruebe con
+  un caso real desde la extensión y confirme.
+- **Pendiente / próximos pasos**: (1) usuario prueba el flujo completo con un
+  PDF y trámite reales; (2) verificar que `PUST_VISA_PREVIA_V_DIA`/`_V_ANO`
+  sí existen con esos nombres en un PDF real; (3) sincronizar
+  `Visa - DS-160 ID` al momento de llenar el DS-160 en CEAC; (4) diseño del
+  botón "Llenar Sistema de Citas" en sí (aún sin ninguna acción).
+- Versión: 1.18.6 → **1.19.0** (funcionalidad nueva → MINOR).
+
+### v1.19.1 — 2026-09-02 — Errores de ClickUp visibles sin abrir la consola
+- El usuario probó el envío real: 8 de 9 campos se guardaron, 1 falló — pero
+  la alerta solo decía "1 fallaron (revisa la consola)" sin decir cuál ni por
+  qué, y para verlo había que inspeccionar el side panel manualmente.
+- **Fix**: `updates` pasó de arreglos `[fieldId, value]` a objetos
+  `{label, fieldId, value}`; el `catch` del loop de envío ahora arma
+  `${label} (${err.message})` por cada fallo (el mensaje ya trae el status y
+  cuerpo de la respuesta de ClickUp, ver `clickUpRequest`) y todos se listan
+  directo en la alerta de la extensión. Los campos que se saltan por no traer
+  dato del PDF (`value == null`) ya no se cuentan como "fallo" — se listan
+  aparte en `console.log` como informativo, no como error.
+- Versión: 1.19.0 → **1.19.1** (arreglo de diagnóstico → PATCH).
+
+### v1.19.2 — 2026-09-02 — Bug real: Teléfono rechazado por ClickUp (formato)
+- Con el diagnóstico de v1.19.1 el usuario mandó el error exacto: `Value is
+  not a valid phone number` (ClickUp `FIELD_016`).
+- **Causa raíz**: `data.phone` viene limpio a solo 10 dígitos por
+  `CLEAN.phone` en `mappings.js` (pensado para el campo del DS-160, que solo
+  quiere el número plano). El campo "Teléfono" de ClickUp es tipo `phone` y
+  exige formato con código de país — se confirmó revisando tareas reales
+  (`+528182036906`).
+- **Fix**: nueva `toClickUpPhone(phone)` en `popup.js` que antepone `+52`
+  (México) a los 10 dígitos antes de mandarlos a ClickUp; si no son
+  exactamente 10 dígitos, no se envía (mejor omitir que mandar un valor que
+  ClickUp va a rechazar igual).
+- Versión: 1.19.1 → **1.19.2** (arreglo de bug real → PATCH).
+
+### v1.19.3 — 2026-09-02 — Debug: fecha de vencimiento de visa previa no llegó
+- El usuario confirmó que "Fecha de Emisión Visa Anterior" sí se guardó pero
+  "Fecha de Vencimiento Visa Anterior" no — consistente con la sospecha ya
+  anotada en v1.19.0: `PUST_VISA_PREVIA_V_DIA`/`_V_ANO` eran una suposición
+  sin verificar contra un PDF real.
+- Se agregó un `console.log` temporal en `processPDF()` que imprime todos los
+  campos crudos `PUST_*` del PDF al cargarlo, para ubicar el nombre real del
+  campo de vencimiento sin adivinar de nuevo. Pendiente: el usuario carga un
+  PDF con visa previa, copia ese log, y se corrige `visaExpiry_day`/`_year`
+  en `popup.js` con los nombres reales.
+- Versión: 1.19.2 → **1.19.3** (debug para diagnosticar → PATCH).
+
+### v1.20.0 — 2026-09-02 — Número DS-160 se manda a ClickUp desde el mismo botón
+- Pendiente explícito desde v1.19.0: el usuario confirmó que quería que el
+  mismo botón "Guardar en ClickUp" se lleve también el Número DS-160,
+  tomándolo "del sistema" (CEAC) en vez de pedirlo aparte.
+- **Implementación**:
+  - `content.js`: nueva acción de mensaje `getAppId` en el listener — lee
+    `ctl00_lblAppID` del DOM (mismo elemento que ya usa `generateReviewPDF`)
+    y responde `{ok:true, appId}` sin pasar por `SECTION_HANDLERS` (no
+    necesita `visasproClientData`, es una lectura puntual del DOM).
+  - `popup.js`: `getDS160IdFromActiveTab()` hace
+    `chrome.tabs.query` + `chrome.tabs.sendMessage({action:'getAppId'})` a la
+    pestaña activa; si falla (no es una pestaña de CEAC, no hay content
+    script, la solicitud aún no existe) devuelve `null` sin lanzar error. Se
+    llama dentro del handler de "Guardar en ClickUp" y el resultado se agrega
+    a `updates` con el field id de `Visa - DS-160 ID` (el que ya existía en
+    ClickUp) — si es `null` se omite igual que cualquier otro campo sin dato.
+  - Diseño: como el `POST` de ClickUp siempre sobreescribe el valor del
+    campo, no pasa nada si el usuario manda el trámite primero sin el
+    DS-160 (porque aún no lo ha creado en CEAC) y después, ya parado en la
+    página de CEAC con la solicitud creada, le da "Guardar en ClickUp" de
+    nuevo — el segundo envío sí se lo lleva y actualiza solo ese campo (los
+    demás quedan igual porque ya estaban guardados).
+- **De paso, el usuario pidió llenar los otros 2 campos del trío de "Check My
+  Case Status" de CEAC** que ya existían en ClickUp pero hasta ahora se
+  llenaban a mano:
+  - `Visa - DS-160 Año Nac.` ← `data.dob_year` tal cual.
+  - `Visa - DS-160 Apellido` ← `toClickUpSurname5(data.lastName)`: toma la
+    primera palabra de `lastName` (que puede traer los 2 apellidos juntos,
+    ej. "GARCIA MALDONADO"), quita acentos vía NFD + `\p{M}` (marcas
+    combinantes), y corta a 5 letras en mayúsculas. Probado contra los
+    valores reales vistos en ClickUp: "García Maldonado" → "GARCI",
+    "Morales Lopez" → "MORAL" — coincide exacto.
+- Versión: 1.19.3 → **1.20.0** (funcionalidad nueva → MINOR).
+
+### v1.21.0 — 2026-09-02 — Botón "Llenar Sistema de Citas" habilitado (primera versión)
+- **Descubrimiento del formulario real**: el usuario pegó en la consola del
+  Sistema de Citas (confirmado: `https://ais.usvisa-info.com/es-mx/niv/schedule/{id}/applicants/new`
+  — GDIT/CGI Federal, el sistema oficial de citas de visa) el script de dump
+  de campos que se le dio en este mismo hilo. Formulario Rails
+  `applicant[...]`, confirma exactamente el mismo listado de consulados (10
+  ciudades, mismos value ids 65-74) que ya se había visto en los Custom
+  Fields de ClickUp.
+- **Reglas de negocio confirmadas con el usuario** para campos que no vienen
+  del PDF ni de ClickUp: "¿Viajará para aplicar?" → siempre "No". "Clase de
+  visa anterior" → siempre B1/B2 (value `2`), independientemente de si hay
+  visa previa (el `<select>` es obligatorio igual). "Número de Petición" →
+  sin regla todavía, se deja vacío para llenar a mano (pendiente).
+- **Implementación**:
+  - `popup.html`: se habilitó `#btn-home-citas` (ya no `disabled`, sin el
+    label "Próximamente"); nueva vista `#citas-view` con un `<select>` de
+    trámites y el botón "Llenar formulario".
+  - `popup.js`: `showView()` soporta la vista `'citas'`. Se generalizó
+    `loadTramites()` → `loadTramitesInto(selectId)` (mismo fetch/filtro de
+    trámites que ya usaba el flujo de "Guardar en ClickUp", reutilizado para
+    ambos selects). `readTramiteFromClickUp(taskId)`: `GET /task/{id}`,
+    arma un objeto plano con los custom fields ya guardados —
+    `fromClickUpDate()` es el inverso de `toClickUpDate()` (epoch-ms → día/
+    mes-código/año). El botón "Llenar formulario" lee el trámite
+    seleccionado y manda `{action:'fillCitas', data}` a la pestaña activa.
+  - `content-citas.js` (nuevo, corre solo en `ais.usvisa-info.com`): mapea
+    cada dato a su campo real del formulario (ids como
+    `applicant_first_name`, `applicant_ds160_number`, etc., confirmados con
+    el dump). Fechas van a selects separados de Día/Mes/Año en formato
+    numérico (a diferencia de DS-160/ClickUp que usan el código de 3 letras
+    JAN..DEC — se convierte con `MONTH_CODE_TO_NUM`). "Consulado" hace match
+    de texto contra el `<select>` usando el valor de "Ubicación del CAS" de
+    ClickUp (con un mapa de alias tipo "CDMX"→"Mexico City" para las
+    variantes que no calzan literal). "Estado de Residencia"/"País de
+    Residencia" se ubican por el texto de su `<label>` en vez de por id fijo,
+    porque son campos `mission_specific_values_attributes][N]` cuyo índice
+    puede variar según la misión configurada en el sistema.
+  - `manifest.json`: nuevo host permission y bloque de `content_scripts`
+    para `https://ais.usvisa-info.com/*`.
+- **Sin resolver todavía** (el botón los deja en la lista de "sin llenar" al
+  reportar el resultado, no falla por eso): "Número de Petición" (sin regla
+  definida), y la fecha de vencimiento de la visa previa (sigue pendiente
+  el debug del nombre real del campo en el PDF, ver v1.19.3).
+- **No probado end-to-end todavía** — falta que el usuario lo corra contra
+  un trámite real con la página del Sistema de Citas abierta y confirme.
+- Versión: 1.20.0 → **1.21.0** (funcionalidad nueva → MINOR).
+
+### v1.21.1 — 2026-09-02 — Diagnóstico: llenado no visible + errores por campo aislados
+- El usuario probó el llenado real y "no hizo nada" — en la consola del
+  Sistema de Citas apareció un error del propio JS del sitio (no del
+  content script): `Cannot read properties of null (reading 'autoclose')`
+  en un `leaveEventHandler` de un `<li>`. Causa probable: al menos un
+  `<select>` del formulario (muy probablemente el de Consulado) está
+  "vestido" con un widget JS del sitio que dibuja su propio dropdown con
+  `<li>` — al cambiar el valor por código en vez de con clics reales, el
+  widget truena en su propia lógica de cierre.
+- Aclaración para el usuario: esta pantalla es de una sola página (a
+  diferencia del DS-160, que tiene varios pasos con postback) — no hace
+  falta el patrón de "continuar tras recargar" que sí usa `content.js` para
+  Security.
+- **Fix defensivo** (mientras se identifica el campo exacto): en
+  `content-citas.js`, cada campo ahora corre en su propio `try/catch`
+  dentro de `fillCitas()` (antes solo había un único `try/catch` alrededor
+  de toda la función en el listener de mensajes) — si un campo truena, ya
+  no le impide al resto llenarse. Se agregó `console.log` por cada campo
+  intentado (para ver en la consola exactamente hasta dónde llega) y la
+  respuesta ahora incluye `errors` (campo + mensaje) además de `filled`/
+  `skipped`, mostrados en la alerta del popup.
+- **Pendiente**: el usuario vuelve a probar con esto y comparte qué campo(s)
+  aparecen en `errors` para localizar cuál exactamente choca con el widget
+  del sitio y ajustar su técnica de llenado (ej. simular clics reales en
+  vez de solo cambiar `.value`, si el problema persiste ahí).
+- Versión: 1.21.0 → **1.21.1** (arreglo de diagnóstico + robustez → PATCH).
+
+### v1.21.2 — 2026-09-02 — Bug real: el `#alert` vivía dentro de `#ds160-view`
+- El usuario probó otra vez: "no hace nada, ni siquiera sale el mensaje de
+  error que me decía" — ni el mensaje de éxito/error de la extensión
+  aparecía al usar el botón de Citas.
+- **Causa raíz**: `<div id="alert">` estaba anidado dentro de `#ds160-view`
+  (usado únicamente por el flujo del DS-160). `showView('citas')` pone
+  `#ds160-view` en `display:none` — así que aunque `showAlert()` seguía
+  poniendo correctamente `#alert` en `display:block`, el div quedaba
+  invisible igual porque su contenedor padre estaba oculto. No era un bug
+  del llenado en sí (ese seguía corriendo, solo que su resultado nunca se
+  veía en pantalla estando en Citas).
+- **Fix**: se movió `#alert` a un nivel compartido por las 3 pantallas
+  (justo después de abrir `.body`, antes de `#home-view`/`#citas-view`/
+  `#ds160-view`), en vez de vivir dentro de una vista específica.
+- Versión: 1.21.1 → **1.21.2** (arreglo de bug real → PATCH).
+
+### v1.21.3 — 2026-09-02 — Consulado fijo a Monterrey, espaciado y alerta autoocultable
+- El usuario probó el llenado real: 26 campos llenados, solo faltaron
+  Consulado (sin dato de "Ubicación del CAS" en la tarea de prueba) y
+  Número de Petición (esperado, sin regla). País de Residencia Permanente y
+  País de Residencia sí estaban entre los 26 (ya se llenaban con México
+  desde v1.21.0) — el usuario los volvió a pedir, se confirma que ya
+  estaban cubiertos, no fue necesario tocar código ahí.
+- 3 ajustes pedidos:
+  1. **Consulado siempre Monterrey**: se reemplazó la búsqueda por texto
+     contra "Ubicación del CAS" de ClickUp (`setSelectByOptionText` +
+     `normalizeCity`, ya removidos) por un valor fijo `CONSULADO_MONTERREY
+     = '71'` en `content-citas.js` — más simple y ya no depende de que ese
+     dato exista en ClickUp.
+  2. **Espacio entre la alerta y la lista de trámites**: `.alert` no tenía
+     `margin-bottom` — se agregó `margin-bottom: 12px`.
+  3. **La alerta se quedaba pegada en pantalla** al navegar de vuelta al
+     home (capturado en pantalla por el usuario) — porque `#alert` es
+     compartido entre las 3 vistas (desde el fix de v1.21.2) y solo se
+     ocultaba manualmente en puntos específicos del flujo del DS-160.
+     `showAlert()` ahora arma un `setTimeout` de 5s que la oculta sola
+     (limpiando cualquier timeout anterior si se dispara otra alerta antes).
+- Versión: 1.21.2 → **1.21.3** (ajustes + un bug real → PATCH).
+
+### v1.21.4 — 2026-09-02 — Bug real: "País de Residencia" le pisaba el valor a "País de Residencia Permanente"
+- El usuario probó con XPath directo sobre el DOM: ni
+  `applicant_permanent_residency_country_code` ni
+  `applicant_mission_specific_values_attributes_1_value` (País de
+  Residencia) quedaban en México.
+- **Causa raíz**: `setByLabel()` usaba `startsWith` para ubicar la etiqueta.
+  La etiqueta "País de Residencia Permanente*" también empieza con "País de
+  Residencia", y aparece ANTES en el formulario que la etiqueta real "País
+  de Residencia*" — así que `Array.find` siempre agarraba la etiqueta
+  equivocada (la del `<select>` de Permanente). El código entonces intentaba
+  poner `el.value = "México"` sobre ese `<select>` (cuyas opciones son
+  códigos tipo `mx`, no el nombre) — en un `<select>`, asignar un value que
+  no calza con ninguna `<option>` no truena, simplemente deja el select sin
+  selección — **pisando** el `'mx'` correcto que la llamada anterior
+  (`setValue('applicant_permanent_residency_country_code', 'mx')`) ya le
+  había puesto. El campo de texto real (`mission_specific_values...[1]`)
+  nunca llegó a tocarse.
+- **Fix**: `setByLabel()` ahora exige coincidencia EXACTA del texto de la
+  etiqueta (sin el asterisco de obligatorio), no "empieza con" — se
+  verificó la lógica con un test aislado antes de reportarlo (confirma que
+  distingue "País de Residencia" de "País de Residencia Permanente"). De
+  paso, `setValue()`/`setRadio()`/`setByLabel()` ahora verifican que el
+  valor realmente haya quedado puesto (comparando `el.value` después de la
+  asignación) en vez de asumir éxito solo porque no hubo excepción — así se
+  detectó este bug y evita falsos positivos futuros.
+- Además, el usuario pidió que el campo de texto libre quede en mayúsculas
+  sin acento: `'México'` → `'MEXICO'`.
+- Versión: 1.21.3 → **1.21.4** (arreglo de bug real → PATCH).
+
+### v1.22.0 — 2026-09-02 — Rediseño de la pantalla del DS-160
+- Pedido del usuario, varios cambios de interfaz sobre la vista del DS-160:
+  1. **Header**: título "VisasPro DS-160" → solo "VisasPro"; se quitó el
+     recuadro rojo "VP" (ya no aparece en ninguna vista, era compartido).
+     El texto de abajo del título ahora hace match exacto con la etiqueta
+     del botón de inicio al que se entró ("Llenar formulario DS-160" /
+     "Llenar Sistema de Citas"), antes decía otra cosa que no correspondía.
+  2. **Tarjeta de cliente**: se quitó el CURP (debajo del nombre) y el
+     bloque de 4 datos (Nacimiento, Género, Estado Civil, Pasaporte) —
+     `renderClientCard()` ya no llena esos elementos, se quitaron del HTML
+     y su CSS (`.data-grid`, `.data-item`) por quedar sin uso.
+  3. **3 botones reorganizados y agrandados**: "Generar PDF de Revisión"
+     (ya no vive dentro de la grilla de Secciones DS-160), "Re-procesar con
+     Claude Vision" y "Limpiar y cargar otro cliente" (ambos ya no viven
+     abajo del todo) se movieron juntos arriba, justo debajo del nombre del
+     cliente, uno al lado del otro en una fila de 3. Nueva clase
+     `.action-btn` (icono arriba + texto abajo, mismo lenguaje visual que
+     `.home-btn` del inicio pero more compacta para caber 3 en una fila) —
+     `.action-btn-primary` (PDF Revisión, oscuro), `.action-btn-danger`
+     (Reprocesar, rojo claro, mismo tono que ya tenía), y la variante base
+     (Limpiar). Etiquetas acortadas para que quepan en el botón chico
+     ("PDF Revisión", "Reprocesar", "Limpiar"), con el texto completo
+     original como `title` (tooltip). Nuevo ícono SVG `icon-trash` en el
+     sprite para Limpiar.
+  4. **Más espacio antes de "Sistema de Citas — ClickUp"**: el `<div
+     class="divider">` que la separa de "Secciones DS-160" pasó de
+     `margin: 0 12px` (heredado, sin margen vertical) a `margin: 16px 12px`.
+- Verificado con una captura headless renderizando la tarjeta con datos de
+  prueba antes de reportarlo.
+- Versión: 1.21.4 → **1.22.0** (rediseño de interfaz → MINOR).
+
+### v1.22.1 — 2026-09-02 — Los 3 botones de acción, debajo de Secciones DS-160
+- El usuario pidió mover los 3 botones (PDF Revisión/Reprocesar/Limpiar) de
+  arriba del nombre del cliente a debajo de toda la grilla de Secciones
+  DS-160, manteniendo el mismo tamaño/diseño de v1.22.0.
+- Fix: se reordenó el `.action-row` en el HTML, ahora entre el `.sections`
+  de Secciones DS-160 y el divider que lleva a Sistema de Citas — ClickUp.
+- Versión: 1.22.0 → **1.22.1** (ajuste de layout → PATCH).
+
+### v1.22.2 — 2026-09-02 — Sección de ClickUp: título y botón rediseñados
+- Pedido del usuario: título de la sección "Sistema de Citas — ClickUp" →
+  "Cargar información a ClickUp"; el botón "Guardar en ClickUp" pasa del
+  estilo de barra delgada (`.btn-section full`) al mismo lenguaje visual
+  que los 3 botones de arriba (ícono arriba, texto abajo, tarjeta
+  redondeada), pero de ancho completo — nuevo modificador `.action-btn.full`
+  (`width:100%`, algo más alto y con texto más grande que las variantes de
+  3-en-fila, ya que no compite por espacio).
+- Verificado con captura headless antes de reportarlo.
+- Versión: 1.22.1 → **1.22.2** (ajuste de interfaz → PATCH).
+
+### v1.23.0 — 2026-09-02 — Configuración pasa a ser una vista más
+- Pedido del usuario: en la vista de Citas, título "Trámites en Progreso" →
+  "Información de Cliente", y el botón "Llenar formulario" pasa del estilo
+  de barra delgada al mismo lenguaje visual `.action-btn.full` que ya se usa
+  en "Guardar en ClickUp". Además, el panel de Configuración (⚙️) se veía
+  "flotando" encima de la vista actual porque vivía fuera de `.body`, entre
+  el header y el resto — se pidió que fuera una vista independiente con su
+  propia flecha de volver, como las demás, y que sus botones seleccionaran
+  el mismo diseño ya establecido.
+- **Implementación**:
+  - `popup.html`: el contenido de `#settings-panel` se movió a un nuevo
+    `#settings-view` dentro de `.body`, hermano de home/ds160/citas-view.
+    Los pares Guardar/Borrar (API Key de Claude y Token de ClickUp) ahora
+    son `.action-row` de 2 `.action-btn` (Guardar = `action-btn-primary`
+    con ícono de check nuevo `icon-check`; Borrar = variante base con
+    `icon-trash`). Nuevo modificador `.action-row.flush` (sin el padding
+    horizontal de 12px que trae `.action-row` por defecto) para usarlo
+    dentro de vistas de nivel superior que ya traen su propio padding
+    (`.body`), a diferencia de `.client-card` que no tiene padding propio.
+  - `popup.js`: `showView()` ahora soporta `'settings'` (con su propio
+    texto de header "Configuración"). Nueva variable `lastMainView` que
+    recuerda la última vista principal (home/ds160/citas) — la flecha de
+    volver, al salir de Configuración, regresa ahí en vez de siempre a home.
+    El botón ⚙️ ya no alterna un `display` a mano, llama a `showView('settings')`.
+- Verificado con 2 capturas headless (Configuración y la vista de Citas
+  actualizada) antes de reportarlo.
+- Versión: 1.22.2 → **1.23.0** (funcionalidad de navegación nueva → MINOR).

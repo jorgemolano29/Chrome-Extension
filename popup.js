@@ -42,7 +42,7 @@ async function pdfToImages(buffer, dpi = 150, quality = 0.85) {
 }
 
 // ════════════════════════════════════════════════════════
-//  VISASPRO — POPUP.JS  v1.16.0
+//  VISASPRO — POPUP.JS  v1.23.0
 // ════════════════════════════════════════════════════════
 
 // La API key real se lee de chrome.storage.local ('vp_api_key', configurada en ⚙️).
@@ -381,6 +381,13 @@ function buildClientData(f) {
     visaIssue_day:          r('PUST_VISA_PREVIA_E_DIA'),
     visaIssue_month:        p('PUST_VISA_PREVIA_E_MES'),
     visaIssue_year:         r('PUST_VISA_PREVIA_E_ANO'),
+    // Fecha de vencimiento de la visa previa — el mes ('PUST_VISA_PREVIA_V_MES')
+    // ya estaba en mappings.js pero nunca se leía aquí (huérfano). Día/año son
+    // una suposición por convención de nombres con el resto del bloque (E_DIA/
+    // E_ANO → V_DIA/V_ANO) — verificar contra un PDF real, ver CONTEXTO_PROYECTO.md.
+    visaExpiry_day:         r('PUST_VISA_PREVIA_V_DIA'),
+    visaExpiry_month:       p('PUST_VISA_PREVIA_V_MES'),
+    visaExpiry_year:        r('PUST_VISA_PREVIA_V_ANO'),
     visaNumber:             p('PUST_VISA_PREVIA_NUMERO'),
     visaLostYear:           r('PUST_ANO_EXTRAVIO'),
     visaLostExplanation:    p('PUST_EXP_EXTRAVIO'),    // TRANSLATE
@@ -539,6 +546,46 @@ const TRANSLATE_KEY_MAP = {
 };
 
 
+// ── Navegación entre pantallas (home / DS-160 / Citas / Configuración) ──
+
+// Configuración es una vista más (con su propia flecha de volver), en vez de
+// un panel que se superpone encima de la vista actual — antes vivía fuera de
+// .body, entre el header y el resto, y aparecía "flotando" sobre lo que
+// hubiera debajo. Se recuerda la última vista "principal" (home/ds160/citas)
+// para volver ahí al salir de Configuración, en vez de siempre ir a home.
+let lastMainView = 'home';
+
+function showView(view) {
+  if (view !== 'settings') lastMainView = view;
+  document.getElementById('home-view').style.display     = view === 'home'     ? 'flex'  : 'none';
+  document.getElementById('ds160-view').style.display     = view === 'ds160'    ? 'block' : 'none';
+  document.getElementById('citas-view').style.display     = view === 'citas'    ? 'block' : 'none';
+  document.getElementById('settings-view').style.display  = view === 'settings' ? 'block' : 'none';
+  document.getElementById('btn-back').style.display       = view === 'home'     ? 'none'  : 'inline-block';
+  // El texto de abajo del título hace match con la etiqueta del botón de
+  // inicio al que se entró — antes decía otra cosa ("Cargador de datos del
+  // cliente"/"Sistema de Citas") que no correspondía con ningún botón.
+  document.getElementById('header-sub').textContent =
+    view === 'ds160'    ? 'Llenar formulario DS-160' :
+    view === 'citas'    ? 'Llenar Sistema de Citas' :
+    view === 'settings' ? 'Configuración' :
+    'Selecciona una opción';
+}
+
+document.getElementById('btn-home-ds160').addEventListener('click', () => showView('ds160'));
+document.getElementById('btn-home-citas').addEventListener('click', () => {
+  showView('citas');
+  loadTramitesInto('citas-tramite-select');
+});
+document.getElementById('btn-back').addEventListener('click', () => {
+  // Desde Configuración, "volver" regresa a la vista en la que estabas antes
+  // de entrar (home/ds160/citas), no siempre a home.
+  const inSettings = document.getElementById('settings-view').style.display !== 'none';
+  showView(inSettings ? lastMainView : 'home');
+});
+
+document.getElementById('btn-review-step1').addEventListener('click', () => fillSection('review'));
+
 // ── Flujo principal ──────────────────────────────────────
 
 document.getElementById('pdf-input').addEventListener('change', function(e) {
@@ -645,6 +692,13 @@ async function processPDF(file) {
 
     if (fieldCount < 5)
       throw new Error(`No se pudieron extraer datos del PDF (${fieldCount} campos). Verifica que sea el formulario VisasPro correcto.`);
+
+    // Debug temporal: campos crudos del bloque "Viajes Previos" (PUST_*), para
+    // verificar contra un PDF real los nombres de campo del vencimiento de la
+    // visa previa (visaExpiry_*, agregado en v1.19.0 sin confirmar) — ver
+    // CONTEXTO_PROYECTO.md.
+    console.log('[VP] Campos PUST_* crudos del PDF:',
+      Object.fromEntries(Object.entries(rawFields).filter(([k]) => k.startsWith('PUST_'))));
 
     setProgress(55, 'Aplicando reglas...');
     const data = buildClientData(rawFields);
@@ -773,21 +827,11 @@ function renderClientCard(data) {
   const initials = ((data.firstName||'')[0]||'') + ((data.lastName||'')[0]||'');
   document.getElementById('avatar').textContent      = initials.toUpperCase() || '?';
   document.getElementById('client-name').textContent = fullName || '—';
-  document.getElementById('client-sub').textContent  = data.curp || '—';
-
-  document.getElementById('data-grid').innerHTML = `
-    <div class="data-item"><div class="lbl">Nacimiento</div>
-      <div class="val">${data.dob_day}/${data.dob_month}/${data.dob_year}</div></div>
-    <div class="data-item"><div class="lbl">Género</div>
-      <div class="val">${data.gender || '—'}</div></div>
-    <div class="data-item"><div class="lbl">Estado Civil</div>
-      <div class="val">${data.maritalStatus || '—'}</div></div>
-    <div class="data-item"><div class="lbl">Pasaporte</div>
-      <div class="val">${data.passportNumber || '—'}</div></div>
-  `;
 
   document.getElementById('step1').style.display       = 'none';
   document.getElementById('client-card').style.display = 'block';
+
+  loadTramitesInto('clickup-tramite-select');
 }
 
 
@@ -810,11 +854,20 @@ function setProgress(pct, msg) {
   document.getElementById('progress-pct').textContent  = pct + '%';
   if (msg) document.getElementById('progress-msg').textContent = msg;
 }
+let alertTimeout = null;
 function showAlert(msg, type) {
   const el = document.getElementById('alert');
   el.textContent = msg; el.className = `alert ${type}`; el.style.display = 'block';
+  // Se autooculta a los 5s — antes se quedaba pegado en pantalla aunque el
+  // usuario navegara a otra vista, porque #alert es compartido entre las 3
+  // pantallas (home/ds160/citas) y solo se ocultaba manualmente.
+  clearTimeout(alertTimeout);
+  alertTimeout = setTimeout(hideAlert, 5000);
 }
-function hideAlert() { document.getElementById('alert').style.display = 'none'; }
+function hideAlert() {
+  clearTimeout(alertTimeout);
+  document.getElementById('alert').style.display = 'none';
+}
 
 
 // ── Restaurar al abrir popup ─────────────────────────────
@@ -824,9 +877,9 @@ function hideAlert() { document.getElementById('alert').style.display = 'none'; 
 // ── Configuración API Key ────────────────────────────────
 
 document.getElementById('btn-settings').addEventListener('click', () => {
-  const panel = document.getElementById('settings-panel');
-  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-  if (panel.style.display === 'block') loadKeyStatus();
+  showView('settings');
+  loadKeyStatus();
+  loadClickUpTokenStatus();
 });
 
 function loadKeyStatus() {
@@ -860,6 +913,42 @@ document.getElementById('btn-clear-key').addEventListener('click', () => {
   chrome.storage.local.remove('vp_api_key', () => {
     document.getElementById('api-key-input').value = '';
     loadKeyStatus();
+  });
+});
+
+// ── Configuración token de ClickUp (Sistema de Citas) ────
+
+function loadClickUpTokenStatus() {
+  chrome.storage.local.get('vp_clickup_token', result => {
+    const status = document.getElementById('clickup-token-status');
+    if (result.vp_clickup_token) {
+      const masked = result.vp_clickup_token.slice(0, 8) + '...' + result.vp_clickup_token.slice(-4);
+      status.textContent = '✅ Token configurado: ' + masked;
+      status.style.color = '#276749';
+    } else {
+      status.textContent = '⚠️ Sin token — no se puede guardar en ClickUp';
+      status.style.color = '#9b1c1c';
+    }
+  });
+}
+
+document.getElementById('btn-save-clickup-token').addEventListener('click', () => {
+  const token = document.getElementById('clickup-token-input').value.trim();
+  if (!token.startsWith('pk_')) {
+    document.getElementById('clickup-token-status').textContent = '❌ Formato inválido. Debe empezar con pk_';
+    document.getElementById('clickup-token-status').style.color = '#9b1c1c';
+    return;
+  }
+  chrome.storage.local.set({ vp_clickup_token: token }, () => {
+    document.getElementById('clickup-token-input').value = '';
+    loadClickUpTokenStatus();
+  });
+});
+
+document.getElementById('btn-clear-clickup-token').addEventListener('click', () => {
+  chrome.storage.local.remove('vp_clickup_token', () => {
+    document.getElementById('clickup-token-input').value = '';
+    loadClickUpTokenStatus();
   });
 });
 
@@ -984,6 +1073,279 @@ function askClaudeVision() {
   });
 }
 
+// ── ClickUp — Sistema de Citas ───────────────────────────
+//
+// Envía al trámite seleccionado en ClickUp el subconjunto de datos del PDF
+// del cliente que se necesita después para llenar el Sistema de Citas. IDs de
+// lista/campos obtenidos directamente de la API de ClickUp del usuario
+// (Space "VisasPro", lista "Trámites") — si algún día se borra/recrea un
+// campo, hay que actualizar los IDs de abajo.
+
+const CLICKUP_LIST_ID = '901404424657'; // Lista "Trámites"
+const CLICKUP_TRAMITE_FIELD_ID = '975d92aa-902d-49be-ad5b-352ad9545662'; // campo "Trámite"
+// Orderindex de la opción "⚡️ Adelanto" dentro de "Trámite" (0-based, según el
+// orden de opciones en ClickUp al momento de escribir esto). Si se reordenan
+// las opciones del drop_down en ClickUp, este número hay que actualizarlo.
+const CLICKUP_ADELANTO_ORDERINDEX = 2;
+const CLICKUP_STATUS_EN_PROGRESO = 'en progreso';
+
+// Custom Fields de la lista "Trámites" usados en el envío
+const CLICKUP_FIELDS = {
+  nombre:           'ff81185b-a180-4fbe-b9e9-e329280ddb77', // Visa - Nombre(s)
+  apellido:         '5aa70e58-a77c-4fac-9be2-73fe64435830', // Visa - Apellido(s)
+  pasaporte:        '3598c8da-3c96-43d2-ba0d-bd36c31014f1', // Visa - Número de Pasaporte
+  estado:           '3b3649a5-d85e-45cb-b329-8bc6e8afabd7', // Visa - Estado de Residencia
+  telefono:         '0df1e9a6-b367-4567-a9e1-d1efc95775cb', // Teléfono
+  correo:           'd1c4b3a3-9fda-4975-a56c-2e3b82a4d324', // Visa - Correo electrónico
+  fechaNacimiento:  'ed8062ac-d0f1-4244-83ea-955ccfda064e', // Visa - Fecha de Nacimiento
+  visaPrevia:       '7d2806c9-2f56-4045-8be9-b0488c48f0f6', // Visa - Visa Previa (drop_down Sí/No)
+  fechaEmision:     '338bd892-b378-421e-a564-cdcc4c346f29', // Visa - Fecha de Emisión Visa Anterior
+  fechaVencimiento: '884b7869-07b0-4491-9f95-007103e01efb', // Visa - Fecha de Vencimiento Visa Anterior
+  ds160Id:          'e4f44d19-3756-4a7a-91e4-ee318bd1bab6', // Visa - DS-160 ID (ya existía en la lista)
+  dsApellido:       'a05a5ba1-c0d9-45f5-a0ee-fb211dd5ddac', // Visa - DS-160 Apellido (ya existía)
+  dsAnoNac:         '8a428fcd-5177-4d67-a8fe-ba4cb8502957', // Visa - DS-160 Año Nac. (ya existía)
+  ubicacionCAS:     '76c79f28-b0d7-41cb-84c8-d7e8592c778c', // Ubicación del CAS (ya existía, de solo lectura aquí — se usa como Consulado al llenar el Sistema de Citas)
+};
+// Orderindex de las opciones del drop_down "Visa - Visa Previa"
+const CLICKUP_VISA_PREVIA_SI = 0;
+const CLICKUP_VISA_PREVIA_NO = 1;
+
+const MONTH_CODE_TO_NUM = { JAN:0, FEB:1, MAR:2, APR:3, MAY:4, JUN:5, JUL:6, AUG:7, SEP:8, OCT:9, NOV:10, DEC:11 };
+
+// data.*_month ya viene convertido a código de 3 letras (JAN..DEC) por la
+// equivalencia 'month' de mappings.js — ver EQUIV.month.
+// El campo "Teléfono" de ClickUp (tipo phone) rechaza un número de 10 dígitos
+// sin código de país ("Value is not a valid phone number") — data.phone ya
+// viene limpio a solo 10 dígitos (ver CLEAN.phone en mappings.js, pensado
+// para el campo del DS-160, no para ClickUp). Se antepone +52 (México).
+function toClickUpPhone(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length !== 10) return null;
+  return `+52${digits}`;
+}
+
+// Primer apellido (primera palabra de data.lastName, que puede traer los 2
+// apellidos juntos, ej. "GARCIA MALDONADO") en mayúsculas, sin acentos, a 5
+// letras — mismo formato que ya usa "Visa - DS-160 Apellido" en ClickUp para
+// el "Check My Case Status" de CEAC (se vieron valores reales "MORAL",
+// "GARCI" al revisar el esquema).
+function toClickUpSurname5(lastName) {
+  const firstSurname = String(lastName || '').trim().split(/\s+/)[0] || '';
+  const clean = firstSurname
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')       // quita acentos (marcas combinantes tras NFD)
+    .replace(/[^A-Za-z]/g, '')
+    .toUpperCase();
+  return clean ? clean.slice(0, 5) : null;
+}
+
+function toClickUpDate(day, monthCode, year) {
+  if (!day || !monthCode || !year) return null;
+  const m = MONTH_CODE_TO_NUM[monthCode];
+  if (m === undefined || isNaN(Number(day)) || isNaN(Number(year))) return null;
+  return Date.UTC(Number(year), m, Number(day));
+}
+
+// Intenta leer el Número de solicitud DS-160 de la pestaña activa, si en ese
+// momento es una página de CEAC con la solicitud ya creada. No es un error si
+// no lo consigue (pestaña activa distinta, DS-160 aún no creado, etc.) — el
+// campo simplemente se omite del envío a ClickUp, igual que cualquier otro
+// dato que el PDF no traiga.
+async function getDS160IdFromActiveTab() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return null;
+    const response = await chrome.tabs.sendMessage(tab.id, { action: 'getAppId' });
+    return response?.appId || null;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function clickUpRequest(path, options = {}) {
+  const { vp_clickup_token: token } = await chrome.storage.local.get('vp_clickup_token');
+  if (!token) throw new Error('No hay token de ClickUp configurado. Configúralo en ⚙️');
+  const res = await fetch(`https://api.clickup.com/api/v2${path}`, {
+    ...options,
+    headers: { 'Authorization': token, 'Content-Type': 'application/json', ...(options.headers || {}) },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`ClickUp API ${res.status}: ${body.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+async function loadTramitesInto(selectId) {
+  const select = document.getElementById(selectId);
+  select.innerHTML = '<option value="">Cargando trámites...</option>';
+  try {
+    const query = `?include_closed=false&statuses[]=${encodeURIComponent(CLICKUP_STATUS_EN_PROGRESO)}`;
+    const data = await clickUpRequest(`/list/${CLICKUP_LIST_ID}/task${query}`);
+    const tasks = (data.tasks || []).filter(t => {
+      const tramiteField = (t.custom_fields || []).find(cf => cf.id === CLICKUP_TRAMITE_FIELD_ID);
+      return !tramiteField || tramiteField.value == null || tramiteField.value !== CLICKUP_ADELANTO_ORDERINDEX;
+    });
+    if (!tasks.length) {
+      select.innerHTML = '<option value="">No hay trámites en progreso (o falta configurar el token)</option>';
+      return;
+    }
+    select.innerHTML = '<option value="">Selecciona un trámite...</option>' +
+      tasks.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+  } catch (err) {
+    console.error('[VP] Error cargando trámites de ClickUp:', err);
+    select.innerHTML = '<option value="">Error al cargar (revisa tu token en ⚙️)</option>';
+  }
+}
+
+document.getElementById('btn-clickup-send').addEventListener('click', async () => {
+  const taskId = document.getElementById('clickup-tramite-select').value;
+  if (!taskId) { showAlert('Selecciona un trámite de ClickUp primero.', 'error'); return; }
+
+  const stored = await chrome.storage.local.get('visasproClientData');
+  const data = stored.visasproClientData;
+  if (!data) { showAlert('No hay datos de cliente cargados.', 'error'); return; }
+
+  const hasPrevVisa = !!(data.visaIssue_day || data.visaIssue_month || data.visaIssue_year);
+
+  const updates = [
+    { label: 'Nombre(s)',                        fieldId: CLICKUP_FIELDS.nombre,          value: data.firstName || null },
+    { label: 'Apellido(s)',                       fieldId: CLICKUP_FIELDS.apellido,        value: data.lastName  || null },
+    { label: 'Número de Pasaporte',               fieldId: CLICKUP_FIELDS.pasaporte,       value: data.passportNumber || null },
+    { label: 'Estado de Residencia',               fieldId: CLICKUP_FIELDS.estado,          value: data.state || null },
+    { label: 'Teléfono',                          fieldId: CLICKUP_FIELDS.telefono,        value: toClickUpPhone(data.phone) },
+    { label: 'Correo electrónico',                fieldId: CLICKUP_FIELDS.correo,          value: data.email || null },
+    { label: 'Fecha de Nacimiento',               fieldId: CLICKUP_FIELDS.fechaNacimiento, value: toClickUpDate(data.dob_day, data.dob_month, data.dob_year) },
+    { label: 'Visa Previa',                       fieldId: CLICKUP_FIELDS.visaPrevia,      value: hasPrevVisa ? CLICKUP_VISA_PREVIA_SI : CLICKUP_VISA_PREVIA_NO },
+    { label: 'DS-160 Apellido (5 letras)',         fieldId: CLICKUP_FIELDS.dsApellido,      value: toClickUpSurname5(data.lastName) },
+    { label: 'DS-160 Año de Nacimiento',           fieldId: CLICKUP_FIELDS.dsAnoNac,        value: data.dob_year || null },
+  ];
+  if (hasPrevVisa) {
+    updates.push({ label: 'Fecha de Emisión Visa Anterior',     fieldId: CLICKUP_FIELDS.fechaEmision,     value: toClickUpDate(data.visaIssue_day, data.visaIssue_month, data.visaIssue_year) });
+    updates.push({ label: 'Fecha de Vencimiento Visa Anterior', fieldId: CLICKUP_FIELDS.fechaVencimiento, value: toClickUpDate(data.visaExpiry_day, data.visaExpiry_month, data.visaExpiry_year) });
+  }
+
+  // Número DS-160: no viene del PDF (se genera hasta crear la solicitud en
+  // CEAC) — se intenta tomar de la pestaña activa si en este momento es una
+  // página de CEAC con la solicitud ya creada; si no, se omite y se puede
+  // volver a mandar después (el POST siempre sobreescribe, no hay problema
+  // en repetir el envío una vez que sí esté disponible).
+  const ds160Id = await getDS160IdFromActiveTab();
+  updates.push({ label: 'Número DS-160', fieldId: CLICKUP_FIELDS.ds160Id, value: ds160Id });
+
+  const btn = document.getElementById('btn-clickup-send');
+  btn.disabled = true;
+  let ok = 0;
+  const skipped = [];
+  const failures = [];
+  for (const { label, fieldId, value } of updates) {
+    if (value === null || value === undefined || value === '') { skipped.push(label); continue; }
+    try {
+      await clickUpRequest(`/task/${taskId}/field/${fieldId}`, {
+        method: 'POST',
+        body: JSON.stringify({ value }),
+      });
+      ok++;
+    } catch (err) {
+      console.error('[VP] Error escribiendo campo ClickUp:', label, fieldId, err);
+      failures.push(`${label} (${err.message})`);
+    }
+  }
+  btn.disabled = false;
+
+  if (skipped.length) console.log('[VP] Campos sin dato en el PDF, no se enviaron a ClickUp:', skipped.join(', '));
+
+  if (failures.length === 0) {
+    showAlert(`ClickUp actualizado: ${ok} campos guardados.`, 'success');
+  } else {
+    showAlert(`ClickUp: ${ok} campos guardados. Falló → ${failures.join(' | ')}`, 'warning');
+  }
+});
+
+
+// ── Sistema de Citas — leer de ClickUp y llenar la página ─
+
+const MONTH_NUM_TO_CODE = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+
+// Inverso de toClickUpDate(): epoch-ms (UTC) → {day, monthCode, year}. El
+// monthCode se deja en el mismo formato de 3 letras (JAN..DEC) que usa el
+// resto del pipeline — content-citas.js lo convierte a número al llenar.
+function fromClickUpDate(ms) {
+  if (!ms) return { day: null, monthCode: null, year: null };
+  const d = new Date(Number(ms));
+  return {
+    day: String(d.getUTCDate()),
+    monthCode: MONTH_NUM_TO_CODE[d.getUTCMonth()],
+    year: String(d.getUTCFullYear()),
+  };
+}
+
+// Lee la tarea completa de ClickUp y arma el objeto que espera
+// content-citas.js — solo los datos que sí tenemos, con las constantes de
+// negocio (México, B1/B2, "No" a viajar para aplicar) ya resueltas aquí para
+// no repetir esa lógica en el content script.
+async function readTramiteFromClickUp(taskId) {
+  const task = await clickUpRequest(`/task/${taskId}`);
+  const cf = {};
+  (task.custom_fields || []).forEach(f => { cf[f.id] = f.value; });
+
+  const dob = fromClickUpDate(cf[CLICKUP_FIELDS.fechaNacimiento]);
+  const emision = fromClickUpDate(cf[CLICKUP_FIELDS.fechaEmision]);
+  const vencimiento = fromClickUpDate(cf[CLICKUP_FIELDS.fechaVencimiento]);
+  const visaPrevia = cf[CLICKUP_FIELDS.visaPrevia] === CLICKUP_VISA_PREVIA_SI;
+
+  return {
+    nombre: cf[CLICKUP_FIELDS.nombre] || null,
+    apellido: cf[CLICKUP_FIELDS.apellido] || null,
+    pasaporte: cf[CLICKUP_FIELDS.pasaporte] || null,
+    ds160Id: cf[CLICKUP_FIELDS.ds160Id] || null,
+    dobDay: dob.day, dobMonthCode: dob.monthCode, dobYear: dob.year,
+    // Teléfono en ClickUp queda como "+52XXXXXXXXXX" (ver toClickUpPhone) —
+    // el Sistema de Citas quiere el número plano, se recortan los últimos 10.
+    telefono: cf[CLICKUP_FIELDS.telefono] ? String(cf[CLICKUP_FIELDS.telefono]).replace(/\D/g, '').slice(-10) : null,
+    correo: cf[CLICKUP_FIELDS.correo] || null,
+    estado: cf[CLICKUP_FIELDS.estado] || null,
+    consulado: cf[CLICKUP_FIELDS.ubicacionCAS] || null,
+    visaPrevia,
+    visaEmisionDia: visaPrevia ? emision.day : null,
+    visaEmisionMesCode: visaPrevia ? emision.monthCode : null,
+    visaEmisionAno: visaPrevia ? emision.year : null,
+    visaVencimientoDia: visaPrevia ? vencimiento.day : null,
+    visaVencimientoMesCode: visaPrevia ? vencimiento.monthCode : null,
+    visaVencimientoAno: visaPrevia ? vencimiento.year : null,
+  };
+}
+
+document.getElementById('btn-citas-fill').addEventListener('click', async () => {
+  const taskId = document.getElementById('citas-tramite-select').value;
+  if (!taskId) { showAlert('Selecciona un trámite primero.', 'error'); return; }
+
+  const btn = document.getElementById('btn-citas-fill');
+  btn.disabled = true;
+  try {
+    const citasData = await readTramiteFromClickUp(taskId);
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error('No se encontró la pestaña activa.');
+    const response = await chrome.tabs.sendMessage(tab.id, { action: 'fillCitas', data: citasData });
+    if (!response?.ok) throw new Error(response?.error || 'Error desconocido al llenar.');
+    let msg = `Sistema de Citas: ${response.filled} campos llenados.`;
+    if (response.errors?.length) msg += ` Errores → ${response.errors.join(' | ')}.`;
+    if (response.skipped?.length) msg += ` Sin llenar: ${response.skipped.join(', ')}.`;
+    showAlert(msg, response.errors?.length ? 'error' : response.skipped?.length ? 'warning' : 'success');
+  } catch (err) {
+    console.error('[VP] Error llenando Sistema de Citas:', err);
+    showAlert(`Error: ${err.message}. ¿Estás en la página del Sistema de Citas (ais.usvisa-info.com)?`, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+
 chrome.storage.local.get('visasproClientData', result => {
-  if (result.visasproClientData) renderClientCard(result.visasproClientData);
+  if (result.visasproClientData) {
+    showView('ds160');
+    renderClientCard(result.visasproClientData);
+  } else {
+    showView('home');
+  }
 });
