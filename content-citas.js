@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════
-//  VISASPRO — CONTENT-CITAS.JS  v1.23.0
+//  VISASPRO — CONTENT-CITAS.JS  v1.24.2
 //  Corre en ais.usvisa-info.com (Sistema de Citas / AIS de GDIT).
 //  Llena el formulario "Crear solicitante" (applicants/new) con los datos
 //  ya guardados en ClickUp para el trámite elegido en el popup. Mapeo de

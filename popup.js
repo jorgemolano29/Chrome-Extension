@@ -42,7 +42,7 @@ async function pdfToImages(buffer, dpi = 150, quality = 0.85) {
 }
 
 // ════════════════════════════════════════════════════════
-//  VISASPRO — POPUP.JS  v1.23.0
+//  VISASPRO — POPUP.JS  v1.24.1
 // ════════════════════════════════════════════════════════
 
 // La API key real se lee de chrome.storage.local ('vp_api_key', configurada en ⚙️).
@@ -1143,7 +1143,11 @@ function toClickUpDate(day, monthCode, year) {
   if (!day || !monthCode || !year) return null;
   const m = MONTH_CODE_TO_NUM[monthCode];
   if (m === undefined || isNaN(Number(day)) || isNaN(Number(year))) return null;
-  return Date.UTC(Number(year), m, Number(day));
+  // Hora LOCAL, no UTC: ClickUp muestra los campos de fecha convirtiendo el
+  // timestamp guardado a la hora local del navegador. Si se guarda medianoche
+  // UTC, en México (UTC-6, sin horario de verano desde 2022) eso cae en las
+  // 18:00 del día anterior y ClickUp termina mostrando un día menos.
+  return new Date(Number(year), m, Number(day)).getTime();
 }
 
 // Intenta leer el Número de solicitud DS-160 de la pestaña activa, si en ese
@@ -1178,6 +1182,7 @@ async function clickUpRequest(path, options = {}) {
 
 async function loadTramitesInto(selectId) {
   const select = document.getElementById(selectId);
+  const previousValue = select.value; // conservar selección si el trámite sigue existiendo tras refrescar
   select.innerHTML = '<option value="">Cargando trámites...</option>';
   try {
     const query = `?include_closed=false&statuses[]=${encodeURIComponent(CLICKUP_STATUS_EN_PROGRESO)}`;
@@ -1185,18 +1190,34 @@ async function loadTramitesInto(selectId) {
     const tasks = (data.tasks || []).filter(t => {
       const tramiteField = (t.custom_fields || []).find(cf => cf.id === CLICKUP_TRAMITE_FIELD_ID);
       return !tramiteField || tramiteField.value == null || tramiteField.value !== CLICKUP_ADELANTO_ORDERINDEX;
-    });
+    }).sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
     if (!tasks.length) {
       select.innerHTML = '<option value="">No hay trámites en progreso (o falta configurar el token)</option>';
       return;
     }
     select.innerHTML = '<option value="">Selecciona un trámite...</option>' +
       tasks.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+    if (previousValue && tasks.some(t => t.id === previousValue)) {
+      select.value = previousValue;
+    }
   } catch (err) {
     console.error('[VP] Error cargando trámites de ClickUp:', err);
     select.innerHTML = '<option value="">Error al cargar (revisa tu token en ⚙️)</option>';
   }
 }
+
+// Refresca la lista de trámites cada vez que el usuario abre el desplegable
+// (mousedown se dispara justo antes de que el navegador muestre las opciones
+// nativas del <select>), para no depender de volver a extraer un PDF —que sí
+// tiene costo— solo para ver un trámite agregado después en ClickUp.
+const tramitesSelectsLoading = new Set();
+function refreshTramitesOnOpen(selectId) {
+  if (tramitesSelectsLoading.has(selectId)) return; // ya hay una carga en curso para este select
+  tramitesSelectsLoading.add(selectId);
+  loadTramitesInto(selectId).finally(() => tramitesSelectsLoading.delete(selectId));
+}
+document.getElementById('clickup-tramite-select').addEventListener('mousedown', () => refreshTramitesOnOpen('clickup-tramite-select'));
+document.getElementById('citas-tramite-select').addEventListener('mousedown', () => refreshTramitesOnOpen('citas-tramite-select'));
 
 document.getElementById('btn-clickup-send').addEventListener('click', async () => {
   const taskId = document.getElementById('clickup-tramite-select').value;
@@ -1267,16 +1288,18 @@ document.getElementById('btn-clickup-send').addEventListener('click', async () =
 
 const MONTH_NUM_TO_CODE = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
 
-// Inverso de toClickUpDate(): epoch-ms (UTC) → {day, monthCode, year}. El
-// monthCode se deja en el mismo formato de 3 letras (JAN..DEC) que usa el
+// Inverso de toClickUpDate(): epoch-ms (hora local) → {day, monthCode, year}.
+// El monthCode se deja en el mismo formato de 3 letras (JAN..DEC) que usa el
 // resto del pipeline — content-citas.js lo convierte a número al llenar.
+// Usa getters locales (no UTC) para ser simétrico con toClickUpDate() — ver
+// el comentario ahí sobre por qué ClickUp necesita medianoche local.
 function fromClickUpDate(ms) {
   if (!ms) return { day: null, monthCode: null, year: null };
   const d = new Date(Number(ms));
   return {
-    day: String(d.getUTCDate()),
-    monthCode: MONTH_NUM_TO_CODE[d.getUTCMonth()],
-    year: String(d.getUTCFullYear()),
+    day: String(d.getDate()),
+    monthCode: MONTH_NUM_TO_CODE[d.getMonth()],
+    year: String(d.getFullYear()),
   };
 }
 

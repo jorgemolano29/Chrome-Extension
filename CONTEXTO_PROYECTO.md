@@ -1560,3 +1560,54 @@ cambio grande de arquitectura → 2.0.0).
 - Verificado con 2 capturas headless (Configuración y la vista de Citas
   actualizada) antes de reportarlo.
 - Versión: 1.22.2 → **1.23.0** (funcionalidad de navegación nueva → MINOR).
+
+### v1.24.0 — 2026-09-03 — Refrescar trámites de ClickUp al abrir el desplegable
+- Problema reportado por el usuario: el desplegable de trámites (tanto el de
+  "Guardar en ClickUp" en la tarjeta del cliente como el de la vista de
+  Citas) solo se poblaba en momentos puntuales — el de ClickUp únicamente al
+  procesar un PDF (`renderClientCard()`), lo que obligaba a reprocesar un PDF
+  (con su costo de API) solo para ver un trámite nuevo que se acabara de dar
+  de alta en ClickUp; el de Citas se refrescaba al entrar a esa vista, pero
+  no si el usuario se quedaba en ella y reabría el desplegable.
+- **Implementación** (`popup.js`):
+  - `loadTramitesInto(selectId)` ahora conserva la selección previa
+    (`previousValue`) y, tras repoblar las opciones desde la API de ClickUp,
+    la reaplica si ese trámite sigue en la lista — antes, repoblar borraba
+    cualquier trámite ya elegido.
+  - Nuevo listener `mousedown` en `clickup-tramite-select` y en
+    `citas-tramite-select` que llama a `loadTramitesInto()` justo antes de
+    que el navegador abra las opciones nativas del `<select>`, con un guard
+    (`tramitesSelectsLoading`, un `Set`) para no lanzar una segunda carga si
+    ya hay una en curso para ese mismo select.
+  - Se mantienen las cargas automáticas que ya existían (al procesar PDF y
+    al entrar a la vista de Citas) como precarga; el `mousedown` garantiza
+    que además se refresque cada vez que se abre el desplegable, sin
+    necesidad de volver a extraer un PDF.
+- Versión: 1.23.0 → **1.24.0** (mejora de funcionalidad existente → MINOR).
+
+### v1.24.1 — 2026-09-03 — Orden alfabético en los desplegables de trámites
+- Pedido del usuario: que los trámites de ambos desplegables (ClickUp y
+  Citas) aparezcan ordenados de la A a la Z, en vez del orden que devuelve
+  la API de ClickUp.
+- `popup.js`: en `loadTramitesInto()`, tras filtrar los trámites, se agregó
+  `.sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }))`
+  (ignora acentos/mayúsculas) antes de generar las opciones del `<select>`.
+- Versión: 1.24.0 → **1.24.1** (ajuste sobre funcionalidad recién agregada → PATCH).
+
+### v1.24.2 — 2026-09-04 — Bug: fechas enviadas a ClickUp llegaban un día antes
+- Reporte del usuario: fecha de nacimiento y fechas de emisión/vencimiento de
+  visa previa llegaban a ClickUp un día antes que en el PDF (ej. 07-oct-2004
+  se guardaba como 06-oct-2004). Afectaba las tres fechas por igual.
+- Causa raíz: `toClickUpDate()` armaba el timestamp con `Date.UTC(...)`
+  (medianoche UTC). ClickUp muestra los campos de fecha convirtiendo ese
+  timestamp a la hora local del navegador. México está en UTC-6 todo el año
+  (sin horario de verano desde 2022), así que medianoche UTC cae a las 18:00
+  del día anterior en hora local — ClickUp terminaba mostrando un día menos.
+- `popup.js`: `toClickUpDate()` ahora arma el timestamp con
+  `new Date(year, month, day).getTime()` (hora local) en vez de `Date.UTC()`.
+  `fromClickUpDate()` (usada al leer un trámite de ClickUp para el Sistema
+  de Citas) se cambió a juego, usando `getDate/getMonth/getFullYear` en vez
+  de los equivalentes `getUTC*`, para mantener el round-trip simétrico.
+- Nota: trámites ya enviados a ClickUp antes de este fix pueden tener estas
+  tres fechas un día antes de lo correcto — revisar manualmente si aplica.
+- Versión: 1.24.1 → **1.24.2** (corrección de bug → PATCH).
